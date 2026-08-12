@@ -1,17 +1,19 @@
 #!/bin/sh
-# Push the current working tree to the Lightsail server and restart the app.
-# Server-side .env, data/ and .venv are excluded and never touched
-# (plain --delete does not remove excluded files on the receiver).
+# Deploy: push local main to GitHub, then the server pulls it and restarts.
+# The server is a git checkout of origin/main using a read-only deploy key;
+# its .env, data/ and .venv are untracked and never touched by pulls.
 set -e
 
-IP="${MONEY_SERVER_IP:?set MONEY_SERVER_IP=<static-ip> (or edit this script)}"
+IP="${MONEY_SERVER_IP:-13.234.241.7}"
 KEY="$HOME/.ssh/lightsail-ap-south-1.pem"
 
-rsync -avz --delete -e "ssh -i $KEY" \
-  --exclude .git --exclude data --exclude .venv \
-  --exclude .env --exclude api_keys.env \
-  --exclude __pycache__ --exclude '*.pyc' --exclude '*.xlsx' \
-  "$(dirname "$0")/../" ubuntu@"$IP":/home/ubuntu/money_manager/
+git -C "$(dirname "$0")/.." push origin main
 
-ssh -i "$KEY" ubuntu@"$IP" "sudo systemctl restart money-manager"
+ssh -i "$KEY" ubuntu@"$IP" "
+  set -e
+  cd ~/money_manager
+  git pull --ff-only
+  .venv/bin/pip install -q -r requirements.txt
+  sudo systemctl restart money-manager
+"
 echo "Deployed to https://$IP"

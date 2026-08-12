@@ -45,18 +45,33 @@ launchctl kickstart -k gui/$(id -u)/com.sanjaysuthraye.moneymanager   # restart
 launchctl bootout   gui/$(id -u)/com.sanjaysuthraye.moneymanager      # stop (then ./run.sh works manually)
 ```
 
+## Production (AWS Lightsail)
+
+The app runs 24/7 at **https://13.234.241.7** (Lightsail `money-manager`,
+ap-south-1, static IP) with the login screen enforced — credentials live in the
+server's `.env` (backup copy: `~/Documents/money-server.env`).
+
+- **Deploy**: `deploy/deploy.sh` — pushes local `main` to GitHub, then the
+  server (a git checkout of `origin/main` using a read-only deploy key) pulls
+  and restarts. Server-side `.env`, `data/`, `.venv` are untracked and survive
+  every deploy.
+- **HTTPS**: Caddy with a Let's Encrypt *IP-address* certificate (~6-day
+  shortlived profile, auto-renewed). `default_sni` in the Caddyfile is required
+  — IP clients send no SNI and Lightsail NAT hides the public IP.
+- **Backups**: nightly cron → `s3://money-backups-707875361098/daily/` via a
+  write-only IAM user. Server ops: `journalctl -u money-manager -f`, restart
+  with `sudo systemctl restart money-manager`.
+
 ## Use it from your iPhone
 
-```bash
-./phone.sh    # prints the URLs + a QR code — scan it with the iPhone camera
-```
+Open **https://13.234.241.7** in Safari → log in → Share → **Add to Home
+Screen** — you get a ₹ icon and a full-screen app (log in once more inside it;
+installed web apps have their own cookie jar). Works from anywhere, ~30-day
+sessions.
 
-- **Same Wi-Fi**: open `http://Sanjays-MacBook-Air.local:8010` in Safari, then
-  Share → **Add to Home Screen** — you get a ₹ icon and a full-screen app.
-- **Caveats**: the Mac must be awake to serve — keep it plugged in (on AC it
-  never sleeps; on battery it sleeps after a minute). And since the app has no
-  login screen, never expose it beyond the home network with router
-  port-forwarding.
+The Mac dev copy is still reachable on home Wi-Fi (`./phone.sh` prints the URL
+and a QR code); it has no credentials configured, so it skips the login screen —
+which is why it must never be exposed beyond the LAN with router port-forwarding.
 
 ## Chat agent auth
 
