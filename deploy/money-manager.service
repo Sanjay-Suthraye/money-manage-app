@@ -1,0 +1,20 @@
+# systemd unit for the Lightsail server (-> /etc/systemd/system/money-manager.service)
+# sudo systemctl daemon-reload && sudo systemctl enable --now money-manager
+[Unit]
+Description=Money Manager (uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/money_manager
+# The app reads .env / api_keys.env itself (dotenv_values) — no EnvironmentFile.
+ExecStart=/home/ubuntu/money_manager/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8010
+Restart=always
+RestartSec=3
+# The Claude Agent SDK spawns the `claude` CLI: needs PATH (npm -g) and HOME (~/.claude).
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/ubuntu
+
+[Install]
+WantedBy=multi-user.target

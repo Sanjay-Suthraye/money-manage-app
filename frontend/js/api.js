@@ -1,9 +1,21 @@
+/* Session expiry: main.js registers a handler that swaps the app for the
+   login view. Failed logins themselves (401 on /auth/*) show inline instead. */
+let onUnauthorized = null;
+export function setUnauthorizedHandler(fn) {
+  onUnauthorized = fn;
+}
+
+function notifyUnauthorized(res, path = "") {
+  if (res.status === 401 && !path.startsWith("/auth/")) onUnauthorized?.();
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`/api${path}`, {
     headers: options.body ? { "Content-Type": "application/json" } : {},
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
+  notifyUnauthorized(res, path);
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -17,6 +29,10 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  authMe: () => request("/auth/me"),
+  login: (username, password) => request("/auth/login", { method: "POST", body: { username, password } }),
+  logout: () => request("/auth/logout", { method: "POST" }),
+
   accounts: () => request("/accounts"),
   createAccount: (data) => request("/accounts", { method: "POST", body: data }),
   updateAccount: (id, patch) => request(`/accounts/${id}`, { method: "PATCH", body: patch }),
@@ -50,6 +66,7 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     const res = await fetch("/api/chat/upload", { method: "POST", body: form });
+    notifyUnauthorized(res);
     if (!res.ok) {
       let detail = res.statusText;
       try { detail = (await res.json()).detail || detail; } catch { /* ignore */ }
@@ -69,6 +86,7 @@ export async function streamChat(message, attachments, { onDelta, onTool, onDone
       signal,
     });
     if (!res.ok || !res.body) {
+      notifyUnauthorized(res);
       let detail = res.statusText;
       try { detail = (await res.json()).detail || detail; } catch { /* ignore */ }
       onError?.(detail);

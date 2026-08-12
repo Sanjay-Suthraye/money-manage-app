@@ -7,11 +7,14 @@ Run:  python -m backend.auth set-password [--generate]
 (restart the service afterwards — settings are read at import time)
 """
 
+import base64
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import sys
+import time
 from pathlib import Path
 
 from backend.settings import PROJECT_ROOT
@@ -39,6 +42,38 @@ def verify_password(password: str, stored: str) -> bool:
         return hmac.compare_digest(digest, bytes.fromhex(hash_hex))
     except (ValueError, AttributeError):
         return False
+
+
+# ---- Session tokens: base64url(json payload) + "." + base64url(hmac-sha256) ----
+# Stateless, so restarts don't log the user out and no table is needed.
+# Revoking every session = rotate MONEY_SESSION_SECRET and restart.
+
+SESSION_TTL_SECONDS = 30 * 24 * 3600  # ~30 days
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _sign(secret: str, payload: bytes) -> str:
+    return _b64(hmac.new(secret.encode(), payload, hashlib.sha256).digest())
+
+
+def mint_session(secret: str, username: str) -> str:
+    body = _b64(json.dumps({"u": username, "exp": int(time.time()) + SESSION_TTL_SECONDS}).encode())
+    return f"{body}.{_sign(secret, body.encode())}"
+
+
+def verify_session(secret: str, token: str) -> str | None:
+    """Return the username if the token is valid and unexpired, else None."""
+    try:
+        body, sig = token.split(".", 1)
+        if not hmac.compare_digest(sig, _sign(secret, body.encode())):
+            return None
+        data = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+        return data["u"] if int(data["exp"]) > time.time() else None
+    except Exception:
+        return None
 
 
 def _update_env_file(path: Path, updates: dict[str, str]) -> None:

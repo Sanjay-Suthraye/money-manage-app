@@ -53,14 +53,10 @@ launchctl bootout   gui/$(id -u)/com.sanjaysuthraye.moneymanager      # stop (th
 
 - **Same Wi-Fi**: open `http://Sanjays-MacBook-Air.local:8010` in Safari, then
   Share → **Add to Home Screen** — you get a ₹ icon and a full-screen app.
-- **From anywhere** (cellular): install **Tailscale** (free) on both devices —
-  Mac App Store + iOS App Store — sign into the same account on both, toggle the
-  iPhone VPN on, and use the `Anywhere` URL that `./phone.sh` prints once
-  Tailscale is connected. Traffic stays private between your own devices.
 - **Caveats**: the Mac must be awake to serve — keep it plugged in (on AC it
   never sleeps; on battery it sleeps after a minute). And since the app has no
-  login screen, never expose it with router port-forwarding — Tailscale is the
-  safe way to reach it remotely.
+  login screen, never expose it beyond the home network with router
+  port-forwarding.
 
 ## Chat agent auth
 

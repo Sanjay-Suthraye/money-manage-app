@@ -1,0 +1,32 @@
+# Caddy reverse proxy for HTTPS on the bare static IP (-> /etc/caddy/Caddyfile).
+# Fill in the real static IP before installing; then: sudo systemctl reload caddy
+#
+# PRIMARY: a real Let's Encrypt IP-address certificate (GA since 2026-01).
+# IP certs only come in the "shortlived" ACME profile (~6-day certs); Caddy
+# renews them automatically about every 4 days — ports 80+443 must stay open.
+# Watch issuance with: journalctl -u caddy -f
+#
+# FALLBACK (if Caddy refuses public-IP subjects against public CAs — known
+# issue caddyserver/caddy#7399): comment out the tls block below and use
+#     tls internal
+# instead, then trust Caddy's root cert on the iPhone once:
+#   scp ubuntu@<IP>:/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt .
+#   AirDrop root.crt to the phone -> Settings > General > VPN & Device
+#   Management > install profile -> Settings > General > About > Certificate
+#   Trust Settings -> enable full trust for "Caddy Local Authority".
+
+{
+	email yashnimavat0@gmail.com
+}
+
+https://<STATIC_IP> {
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+	# flush_interval -1: never buffer — keeps the chat SSE stream incremental.
+	reverse_proxy 127.0.0.1:8010 {
+		flush_interval -1
+	}
+}

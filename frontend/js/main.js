@@ -1,4 +1,5 @@
 import { html, render, useEffect, useState } from "./html.js";
+import { api, setUnauthorizedHandler } from "./api.js";
 import { refreshRefData } from "./store.js";
 import { ToastHost } from "./components/ui.js";
 import { TransactionsPage } from "./pages/transactions.js";
@@ -59,4 +60,75 @@ function App() {
   `;
 }
 
-render(html`<${App} />`, document.getElementById("app"));
+function LoginView({ onSuccess }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.login(username.trim(), password);
+      onSuccess();
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
+  return html`
+    <div class="login-page">
+      <form class="login-card" onSubmit=${submit}>
+        <h1>₹ Money</h1>
+        <div class="field">
+          <label>Username</label>
+          <input
+            type="text"
+            autocomplete="username"
+            autocapitalize="none"
+            value=${username}
+            onInput=${(e) => setUsername(e.target.value)}
+          />
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input
+            type="password"
+            autocomplete="current-password"
+            value=${password}
+            onInput=${(e) => setPassword(e.target.value)}
+          />
+        </div>
+        ${error && html`<div class="login-error">${error}</div>`}
+        <button class="btn" type="submit" disabled=${busy || !username.trim() || !password}>
+          ${busy ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+    </div>
+  `;
+}
+
+/* Gate: ask the server whether auth is on and whether the session cookie is
+   valid; locally (no credentials configured) this resolves straight to the app.
+   A 401 later — session expiry — swaps the app back for the login view; chat
+   history survives via the module-level savedMessages in pages/chat.js. */
+function Root() {
+  const [auth, setAuth] = useState("checking"); // checking | login | ready
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => setAuth("login"));
+    api
+      .authMe()
+      .then((s) => setAuth(!s.auth_enabled || s.authenticated ? "ready" : "login"))
+      .catch(() => setAuth("ready")); // /me unreachable → let App surface errors
+  }, []);
+
+  if (auth === "checking") return null;
+  if (auth === "login") return html`<${LoginView} onSuccess=${() => setAuth("ready")} />`;
+  return html`<${App} />`;
+}
+
+render(html`<${Root} />`, document.getElementById("app"));

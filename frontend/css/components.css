@@ -254,3 +254,17 @@
 /* ---- Empty state ---- */
 .empty { text-align: center; padding: 48px 24px; color: var(--muted); }
 .empty .big { font-size: 40px; margin-bottom: 10px; }
+
+/* ---- Login ---- */
+.login-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.login-card {
+  width: min(340px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+.login-card h1 { text-align: center; font-size: 22px; font-weight: 700; margin-bottom: 18px; }
+.login-card .btn { margin-top: 4px; }
+.login-error { color: var(--danger); font-size: 13.5px; margin: -4px 0 12px; }

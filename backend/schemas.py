@@ -11,6 +11,11 @@ LoanKind = Literal["lend", "borrow", "repay_in", "repay_out"]
 AccountType = Literal["cash", "bank", "credit_card", "wallet"]
 
 
+class LoginIn(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
 class AccountIn(BaseModel):
     name: str = Field(min_length=1)
     type: AccountType
