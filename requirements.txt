@@ -3,6 +3,7 @@ uvicorn[standard]
 sqlalchemy>=2.0
 pydantic>=2
 openpyxl
+pillow
 python-multipart
 sse-starlette
 python-dotenv

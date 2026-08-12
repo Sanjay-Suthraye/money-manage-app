@@ -57,6 +57,9 @@ class AgentSession:
             allowed_tools=ALLOWED_TOOL_NAMES,
             disallowed_tools=DISALLOWED,
             include_partial_messages=True,
+            # Tool results carry base64 images; the SDK default line buffer
+            # is 1 MiB and kills the stream on anything bigger.
+            max_buffer_size=32 * 1024 * 1024,
             max_turns=25,
             model=settings.AGENT_MODEL,
             env=env,

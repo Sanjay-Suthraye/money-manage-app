@@ -342,6 +342,33 @@ async def delete_transaction(args: dict[str, Any]) -> dict:
         db.close()
 
 
+# Model-friendly image bounds: ~1568px is Claude vision's effective maximum,
+# and results must stay well under transport/API message limits.
+IMAGE_SHRINK_THRESHOLD_BYTES = 500 * 1024
+IMAGE_MAX_DIMENSION = 1568
+
+
+def _shrink_image(raw: bytes) -> bytes | None:
+    """Re-encode a large image as a bounded JPEG; None = keep the original."""
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        with Image.open(BytesIO(raw)) as img:
+            oversized = max(img.size) > IMAGE_MAX_DIMENSION
+            if len(raw) <= IMAGE_SHRINK_THRESHOLD_BYTES and not oversized:
+                return None
+            img = img.convert("RGB")
+            if oversized:
+                img.thumbnail((IMAGE_MAX_DIMENSION, IMAGE_MAX_DIMENSION))
+            out = BytesIO()
+            img.save(out, format="JPEG", quality=80)
+            return out.getvalue()
+    except Exception:
+        return None  # unreadable/exotic image: fall back to the original bytes
+
+
 def _safe_upload_path(path_str: str) -> Path:
     path = Path(path_str).resolve()
     if UPLOAD_DIR.resolve() not in path.parents:
@@ -378,8 +405,12 @@ async def inspect_file(args: dict[str, Any]) -> dict:
             )
             return _ok(analysis)
         if suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
-            data = base64.standard_b64encode(path.read_bytes()).decode()
+            raw = path.read_bytes()
             mime = mimetypes.guess_type(path.name)[0] or "image/png"
+            shrunk = _shrink_image(raw)
+            if shrunk is not None:
+                raw, mime = shrunk, "image/jpeg"
+            data = base64.standard_b64encode(raw).decode()
             return {"content": [{"type": "image", "data": data, "mimeType": mime}]}
         if suffix in (".csv", ".txt"):
             return _ok({"kind": "text", "preview": path.read_text(errors="replace")[:8000]})
