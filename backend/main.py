@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend import settings
-from backend.db import engine
+from backend.db import engine, run_migrations
 from backend.models import Base
 from backend.routers import (
     accounts, auth, budgets, chat, export, importer, persons, recurring, summary, transactions,
@@ -18,6 +18,8 @@ async def lifespan(app: FastAPI):
     # Schema only — seeding is explicit (python -m backend.seed) so a
     # freshly-wiped DB isn't repopulated with default categories on restart.
     Base.metadata.create_all(engine)
+    run_migrations()
+    chat.backfill_conversations()
     yield
 
 

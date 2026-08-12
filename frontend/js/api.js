@@ -85,6 +85,9 @@ export const api = {
   chatReset: () => request("/chat/reset", { method: "POST" }),
   chatHistory: () => request("/chat/history"),
   chatStop: () => request("/chat/stop", { method: "POST", body: {} }),
+  conversations: () => request("/chat/conversations"),
+  conversationMessages: (id) => request(`/chat/conversations/${id}/messages`),
+  deleteConversation: (id) => request(`/chat/conversations/${id}`, { method: "DELETE" }),
 
   uploadChatFile: async (file) => {
     const form = new FormData();

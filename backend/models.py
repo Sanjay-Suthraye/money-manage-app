@@ -102,8 +102,20 @@ class Transaction(Base):
     person: Mapped[Person | None] = relationship()
 
 
+class Conversation(Base):
+    """One chat thread. archived_at NULL = the single active thread; "New chat"
+    archives it and a fresh one is created lazily."""
+
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(default="New conversation")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    archived_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
 class ChatMessage(Base):
-    """Persistent transcript of the single chat thread (wiped by "New chat")."""
+    """Persistent chat transcript, grouped into conversations."""
 
     __tablename__ = "chat_messages"
     __table_args__ = (CheckConstraint("role IN ('user', 'agent', 'tool')"),)
@@ -114,6 +126,7 @@ class ChatMessage(Base):
     tool_name: Mapped[str | None] = mapped_column(default=None)
     tool_writes: Mapped[bool] = mapped_column(default=False)
     attachments: Mapped[str | None] = mapped_column(default=None)  # JSON list of filenames
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 

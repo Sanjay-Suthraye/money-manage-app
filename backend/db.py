@@ -29,3 +29,17 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def run_migrations() -> None:
+    """Additive column migrations create_all can't do. Idempotent; called from
+    the app lifespan after create_all."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(chat_messages)"))}
+        if cols and "conversation_id" not in cols:
+            conn.execute(text(
+                "ALTER TABLE chat_messages ADD COLUMN conversation_id INTEGER "
+                "REFERENCES conversations(id)"
+            ))

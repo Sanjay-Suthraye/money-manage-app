@@ -1,7 +1,8 @@
 import { html, useEffect, useMemo, useRef, useState } from "../html.js";
 import { api, streamChat } from "../api.js";
+import { shortDate } from "../format.js";
 import { invalidate } from "../store.js";
-import { toast } from "../components/ui.js";
+import { Sheet, toast, useApi } from "../components/ui.js";
 import { renderMarkdown } from "../markdown.js";
 
 /* Agent replies render as (safe, escaped-first) markdown; re-parsed per delta. */
@@ -27,6 +28,79 @@ const SUGGESTIONS = [
 let savedMessages = []; // survives tab switches within the session
 let historyLoaded = false; // server history fetched once per page load
 
+/* Read-only view of an archived (or the current) conversation. */
+function TranscriptSheet({ conversation, onClose, onDeleted }) {
+  const { data: msgs } = useApi(() => api.conversationMessages(conversation.id), [conversation.id]);
+
+  async function remove() {
+    try {
+      await api.deleteConversation(conversation.id);
+      toast("Conversation deleted");
+      onDeleted();
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  return html`
+    <${Sheet} onClose=${onClose}>
+      <div class="spread">
+        <h2 style="margin:0" class="ellipsis">${conversation.title}</h2>
+        ${!conversation.active &&
+        html`<button class="chip" onClick=${remove}>Delete</button>`}
+      </div>
+      <div class="muted" style="font-size:12.5px; margin:4px 0 10px">
+        ${conversation.active ? "current conversation" : `read-only transcript · ${shortDate(conversation.last_at.slice(0, 10))}`}
+      </div>
+      <div class="chat-inner" style="padding:0">
+        ${(msgs || []).map((m, i) =>
+          m.role === "agent"
+            ? html`<${AgentBubble} key=${i} text=${m.text} />`
+            : html`
+                <div key=${i} class="bubble ${m.role}">
+                  ${m.attachments?.length > 0 &&
+                  html`<div class="attach-note">📎 ${m.attachments.join(", ")}</div>`}
+                  ${m.text}
+                </div>
+              `
+        )}
+        ${msgs?.length === 0 && html`<div class="muted" style="padding:12px 0">Empty conversation.</div>`}
+      </div>
+    <//>
+  `;
+}
+
+/* List of conversations: the current thread plus archived ones. */
+function ConversationsSheet({ onClose }) {
+  const [refresh, setRefresh] = useState(0);
+  const [viewing, setViewing] = useState(null);
+  const { data: convs } = useApi(() => api.conversations(), [refresh]);
+
+  return html`
+    <${Sheet} onClose=${onClose}>
+      <h2>Chat history</h2>
+      ${(convs || []).map(
+        (c) => html`
+          <button class="convrow" key=${c.id} onClick=${() => setViewing(c)}>
+            <div class="grow" style="text-align:left; min-width:0">
+              <div class="ellipsis" style="font-weight:550">
+                ${c.title}${c.active && html`<span class="split-badge">current</span>`}
+              </div>
+              <div class="sub">${c.message_count} message${c.message_count === 1 ? "" : "s"} · ${shortDate(c.last_at.slice(0, 10))}</div>
+            </div>
+            <span class="muted">›</span>
+          </button>
+        `
+      )}
+      ${convs?.length === 0 && html`<div class="muted" style="padding:12px 0">Nothing here yet.</div>`}
+      ${viewing &&
+      html`<${TranscriptSheet} conversation=${viewing}
+        onClose=${() => setViewing(null)}
+        onDeleted=${() => { setViewing(null); setRefresh((r) => r + 1); }} />`}
+    <//>
+  `;
+}
+
 /* Small preview of a staged image attachment; URL revoked on unmount. */
 function PendingThumb({ file }) {
   const url = useMemo(() => URL.createObjectURL(file), [file]);
@@ -40,6 +114,7 @@ export function ChatPage() {
   const [busy, setBusy] = useState(false);
   const [pendingFile, setPendingFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const scrollRef = useRef(null);
   const stickToBottom = useRef(true);
   const abortRef = useRef(null);
@@ -205,21 +280,25 @@ export function ChatPage() {
 
   async function reset() {
     abortRef.current?.abort();
+    let archived = false;
     try {
-      await api.chatReset();
+      archived = (await api.chatReset())?.archived ?? false;
     } catch { /* backend may be down; clear locally anyway */ }
     for (const m of savedMessages) if (m.thumb) URL.revokeObjectURL(m.thumb);
     savedMessages = [];
     setMessages([]);
     setBusy(false);
-    toast("New conversation started");
+    toast(archived ? "Conversation archived — new chat started" : "New conversation started");
   }
 
   return html`
     <div class="chat-page">
       <div class="topbar" style="padding:10px 16px; position:static">
         <h1>Chat</h1>
-        <button class="chip" onClick=${reset}>New chat</button>
+        <div style="display:flex; gap:8px">
+          <button class="chip" onClick=${() => setHistoryOpen(true)}>History</button>
+          <button class="chip" onClick=${reset}>New chat</button>
+        </div>
       </div>
       <div class="chat-scroll" ref=${scrollRef} onScroll=${onScroll}>
         <div class="chat-inner">
@@ -300,6 +379,7 @@ export function ChatPage() {
             : html`<button class="send" onClick=${() => send()} aria-label="Send">➤</button>`}
         </div>
       </div>
+      ${historyOpen && html`<${ConversationsSheet} onClose=${() => setHistoryOpen(false)} />`}
     </div>
   `;
 }
