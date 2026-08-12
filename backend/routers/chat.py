@@ -3,12 +3,16 @@ import re
 from uuid import uuid4
 
 from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolUseBlock
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from backend.agent.client import agent_session
 from backend.agent.tools import UPLOAD_DIR, WRITE_TOOLS
+from backend.db import SessionLocal, get_db
+from backend.models import ChatMessage
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -83,6 +87,17 @@ async def upload(file: UploadFile):
     return {"path": str(path), "filename": file.filename, "size": len(data)}
 
 
+def _save_message(role: str, text: str, tool_name: str | None = None,
+                  tool_writes: bool = False, attachments: list[str] | None = None) -> None:
+    db = SessionLocal()
+    try:
+        db.add(ChatMessage(role=role, text=text, tool_name=tool_name, tool_writes=tool_writes,
+                           attachments=json.dumps(attachments) if attachments else None))
+        db.commit()
+    finally:
+        db.close()
+
+
 def _compose_prompt(body: ChatIn) -> str:
     if not body.attachments:
         return body.message
@@ -100,6 +115,10 @@ async def chat(body: ChatIn):
             except Exception as exc:
                 yield {"event": "error", "data": json.dumps({"message": str(exc)})}
                 return
+            _save_message("user", body.message or "(attached file)",
+                          attachments=[a.filename for a in body.attachments])
+            chunks: list[str] = []
+            agent_saved = False
             try:
                 await client.query(_compose_prompt(body))
                 async for msg in client.receive_response():
@@ -107,6 +126,7 @@ async def chat(body: ChatIn):
                         event = msg.event
                         if (event.get("type") == "content_block_delta"
                                 and event.get("delta", {}).get("type") == "text_delta"):
+                            chunks.append(event["delta"]["text"])
                             yield {"event": "delta",
                                    "data": json.dumps({"text": event["delta"]["text"]})}
                     elif isinstance(msg, AssistantMessage):
@@ -115,12 +135,18 @@ async def chat(body: ChatIn):
                             # tool calls (ToolSearch etc.) are noise in the chat.
                             if isinstance(block, ToolUseBlock) and block.name.startswith("mcp__money__"):
                                 name = block.name.removeprefix("mcp__money__")
+                                summary = _summarize(name, block.input or {})
+                                _save_message("tool", summary, tool_name=name,
+                                              tool_writes=name in WRITE_TOOLS)
                                 yield {"event": "tool", "data": json.dumps({
                                     "name": name,
-                                    "summary": _summarize(name, block.input or {}),
+                                    "summary": summary,
                                     "writes": name in WRITE_TOOLS,
                                 })}
                     elif isinstance(msg, ResultMessage):
+                        if chunks:
+                            _save_message("agent", "".join(chunks))
+                        agent_saved = True
                         yield {"event": "done", "data": json.dumps({
                             "ok": not msg.is_error,
                             "cost_usd": msg.total_cost_usd,
@@ -129,11 +155,36 @@ async def chat(body: ChatIn):
                 # The SDK session may be wedged; drop it so the next message reconnects.
                 await agent_session.reset()
                 yield {"event": "error", "data": json.dumps({"message": str(exc)})}
+            finally:
+                # Client disconnect raises CancelledError (not Exception) — keep
+                # whatever text already streamed.
+                if not agent_saved and chunks:
+                    _save_message("agent", "".join(chunks))
 
     return EventSourceResponse(gen())
 
 
+@router.get("/history")
+def history(db: Session = Depends(get_db)):
+    rows = db.scalars(select(ChatMessage).order_by(ChatMessage.id.desc()).limit(200)).all()
+    return [
+        {"id": m.id, "role": m.role, "text": m.text, "tool_name": m.tool_name,
+         "tool_writes": m.tool_writes,
+         "attachments": json.loads(m.attachments) if m.attachments else []}
+        for m in reversed(rows)
+    ]
+
+
 @router.post("/reset")
 async def reset():
-    await agent_session.reset()
+    # Take the lock so a reset can't wipe history mid-stream and then have the
+    # finishing stream append a stale agent row (the frontend aborts first).
+    async with agent_session.lock:
+        await agent_session.reset()
+        db = SessionLocal()
+        try:
+            db.execute(delete(ChatMessage))
+            db.commit()
+        finally:
+            db.close()
     return {"ok": True}

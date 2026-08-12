@@ -30,8 +30,8 @@ class AccountPatch(BaseModel):
     name: str | None = None
     type: AccountType | None = None
     opening_balance: Decimal | None = None
-    statement_day: int | None = None
-    due_day: int | None = None
+    statement_day: int | None = Field(default=None, ge=1, le=31)
+    due_day: int | None = Field(default=None, ge=1, le=31)
     credit_limit: Decimal | None = None
     is_archived: bool | None = None
 
@@ -40,6 +40,12 @@ class CategoryIn(BaseModel):
     name: str = Field(min_length=1)
     kind: Literal["income", "expense"] = "expense"
     parent_id: int | None = None
+
+
+class CategoryPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    color_slot: int | None = Field(default=None, ge=0, le=7)
+    kind: Literal["income", "expense"] | None = None
 
 
 class PersonIn(BaseModel):

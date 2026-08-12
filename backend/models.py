@@ -100,3 +100,18 @@ class Transaction(Base):
     to_account: Mapped[Account | None] = relationship(foreign_keys=[to_account_id])
     category: Mapped[Category | None] = relationship()
     person: Mapped[Person | None] = relationship()
+
+
+class ChatMessage(Base):
+    """Persistent transcript of the single chat thread (wiped by "New chat")."""
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (CheckConstraint("role IN ('user', 'agent', 'tool')"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    role: Mapped[str]
+    text: Mapped[str] = mapped_column(default="")
+    tool_name: Mapped[str | None] = mapped_column(default=None)
+    tool_writes: Mapped[bool] = mapped_column(default=False)
+    attachments: Mapped[str | None] = mapped_column(default=None)  # JSON list of filenames
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -1,4 +1,4 @@
-import { html, useMemo, useState } from "../html.js";
+import { html, useEffect, useMemo, useState } from "../html.js";
 import { api } from "../api.js";
 import { fmt, dayLabel, monthBounds, splitCategoryName, todayISO } from "../format.js";
 import { setMonth, invalidate } from "../store.js";
@@ -17,12 +17,12 @@ const TYPE_META = {
   repay_out: { sign: "−", cls: "muted" },
 };
 
+const LOAN_TYPES = ["lend", "borrow", "repay_in", "repay_out"];
+const LOAN_VERBS = { lend: "Lent to", borrow: "Borrowed from", repay_in: "Repaid by", repay_out: "Repaid to" };
+
 function txTitle(tx) {
   if (tx.type === "transfer") return `${tx.account.name} → ${tx.to_account?.name}`;
-  if (tx.person) {
-    const verbs = { lend: "Lent to", borrow: "Borrowed from", repay_in: "Repaid by", repay_out: "Repaid to" };
-    return `${verbs[tx.type]} ${tx.person.name}`;
-  }
+  if (tx.person) return `${LOAN_VERBS[tx.type]} ${tx.person.name}`;
   return tx.note || tx.category?.name || tx.type;
 }
 
@@ -50,7 +50,7 @@ export function TxRow({ tx, onClick }) {
     <button class="txrow" onClick=${onClick}>
       <div class="dot" style="background:${badge.color}">${badge.text}</div>
       <div class="main">
-        <div class="title ellipsis">${txTitle(tx)}</div>
+        <div class="title ellipsis">${txTitle(tx)}${tx.split_group_id && html`<span class="split-badge">split</span>`}</div>
         <div class="sub ellipsis">${txSub(tx)}</div>
       </div>
       <div class="amt ${meta.cls} tnum">${meta.sign}${fmt(tx.inr_amount)}</div>
@@ -61,7 +61,7 @@ export function TxRow({ tx, onClick }) {
 /* ---------- Add / Edit sheet ---------- */
 
 export function TxSheet({ tx, onClose, onSaved }) {
-  const { accounts, categories } = useStore();
+  const { accounts, categories, persons } = useStore();
   const isEdit = !!tx?.id;
   const [type, setType] = useState(tx?.type && ["income", "expense", "transfer"].includes(tx.type) ? tx.type : "expense");
   const [amount, setAmount] = useState(tx ? String(tx.amount) : "");
@@ -73,6 +73,14 @@ export function TxSheet({ tx, onClose, onSaved }) {
   const [date, setDate] = useState(tx?.date || todayISO());
   const [note, setNote] = useState(tx?.note || "");
   const [saving, setSaving] = useState(false);
+  const [split, setSplit] = useState(false);
+  const [splitPersonId, setSplitPersonId] = useState(null);
+  const [friendAmount, setFriendAmount] = useState("");
+
+  const canSplit = type === "expense" && !isEdit && currency === "INR";
+  const splitOn = canSplit && split;
+  const myShare = splitOn ? Number(amount) - Number(friendAmount || 0) : Number(amount);
+  const splitPerson = persons.find((p) => p.id === splitPersonId);
 
   const cats = categories.filter((c) => c.kind === type);
   const selectedParent = cats.find(
@@ -89,11 +97,27 @@ export function TxSheet({ tx, onClose, onSaved }) {
     Number(amount) > 0 &&
     accountId &&
     (type !== "transfer" || (toAccountId && toAccountId !== accountId)) &&
-    (currency === "INR" || Number(inrAmount) > 0);
+    (currency === "INR" || Number(inrAmount) > 0) &&
+    (!splitOn || (splitPersonId && Number(friendAmount) > 0 && Number(friendAmount) < Number(amount)));
 
   async function save() {
     setSaving(true);
     try {
+      if (splitOn) {
+        await api.createSplit({
+          date,
+          account_id: accountId,
+          category_id: categoryId,
+          person_id: splitPersonId,
+          my_amount: myShare,
+          friend_amount: Number(friendAmount),
+          note: note || null,
+        });
+        invalidate();
+        toast(`Split saved — ${fmt(myShare)} expense + ${fmt(Number(friendAmount))} lent`);
+        onSaved();
+        return;
+      }
       const payload = {
         type,
         date,
@@ -192,6 +216,32 @@ export function TxSheet({ tx, onClose, onSaved }) {
               `}
             </div>
           `}
+      ${canSplit &&
+      html`
+        <div class="field">
+          <button class="chip ${split ? "sel" : ""}" onClick=${() => setSplit(!split)}>
+            ⑃ Split with someone
+          </button>
+          ${splitOn &&
+          html`
+            <div style="margin-top:10px">
+              ${persons.length === 0
+                ? html`<div class="muted" style="font-size:13px">Add people on the People tab first.</div>`
+                : html`
+                    <label>Who owes you?</label>
+                    <${Chips} items=${persons} value=${splitPersonId} onChange=${setSplitPersonId} />
+                    <label style="margin-top:8px">Their share (of ₹${amount || "…"} total)</label>
+                    <input type="text" inputmode="decimal" value=${friendAmount} placeholder="0"
+                      onInput=${(e) => setFriendAmount(e.target.value.replace(/[^\d.]/g, ""))} />
+                    ${Number(friendAmount) > 0 && Number(friendAmount) < Number(amount) && splitPerson &&
+                    html`<div class="muted" style="font-size:12.5px; margin-top:6px">
+                      You pay ${fmt(myShare)} · ${splitPerson.name} owes ${fmt(Number(friendAmount))}
+                    </div>`}
+                  `}
+            </div>
+          `}
+        </div>
+      `}
       <div class="field">
         <label>Date</label>
         <div class="chips">
@@ -215,18 +265,142 @@ export function TxSheet({ tx, onClose, onSaved }) {
   `;
 }
 
+/* ---------- Loan edit (amount/account/date/note only — kind + person are fixed) ---------- */
+
+function LoanEditSheet({ tx, onClose, onSaved }) {
+  const { accounts } = useStore();
+  const [amount, setAmount] = useState(String(tx.amount));
+  const [accountId, setAccountId] = useState(tx.account?.id ?? null);
+  const [date, setDate] = useState(tx.date);
+  const [note, setNote] = useState(tx.note || "");
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try {
+      // Never send type/person_id: the PATCH merge keeps them, so the loan
+      // can't be silently converted into an expense.
+      await api.updateTransaction(tx.id, {
+        amount: Number(amount),
+        account_id: accountId,
+        date,
+        note,
+      });
+      invalidate();
+      toast("Loan entry updated");
+      onSaved();
+    } catch (err) {
+      toast(err.message);
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    setSaving(true);
+    try {
+      await api.deleteTransaction(tx.id);
+      invalidate();
+      toast("Loan entry deleted");
+      onSaved();
+    } catch (err) {
+      toast(err.message);
+      setSaving(false);
+    }
+  }
+
+  return html`
+    <${Sheet} onClose=${onClose}>
+      <h2>${LOAN_VERBS[tx.type]} ${tx.person?.name}</h2>
+      <${AmountInput} value=${amount} onChange=${setAmount} currency="INR" />
+      <div class="field" style="margin-top:10px">
+        <label>Account</label>
+        <${Chips} items=${accounts} value=${accountId} onChange=${setAccountId} />
+      </div>
+      <div class="field">
+        <label>Date</label>
+        <input type="date" value=${date} onInput=${(e) => setDate(e.target.value)} />
+      </div>
+      <div class="field">
+        <label>Note</label>
+        <input type="text" value=${note} placeholder="Optional" onInput=${(e) => setNote(e.target.value)} />
+      </div>
+      <div class="btn-row">
+        <button class="btn danger" disabled=${saving} onClick=${remove}>Delete</button>
+        <button class="btn" disabled=${!(Number(amount) > 0) || !accountId || saving} onClick=${save}>
+          Save changes
+        </button>
+      </div>
+    <//>
+  `;
+}
+
+/* Route edits to the right sheet: loans get their own editor so their kind and
+   person can never be clobbered by the income/expense form. */
+export function TxEditor({ tx, onClose, onSaved }) {
+  if (LOAN_TYPES.includes(tx.type)) {
+    return html`<${LoanEditSheet} tx=${tx} onClose=${onClose} onSaved=${onSaved} />`;
+  }
+  return html`<${TxSheet} tx=${tx} onClose=${onClose} onSaved=${onSaved} />`;
+}
+
 /* ---------- Page ---------- */
+
+function FilterSheet({ filters, onChange, onClose }) {
+  const { accounts, persons } = useStore();
+  return html`
+    <${Sheet} onClose=${onClose}>
+      <h2>Filters</h2>
+      <div class="field">
+        <label>Account</label>
+        <${Chips} items=${accounts} value=${filters.account_id} allowNone
+          onChange=${(id) => onChange({ ...filters, account_id: id })} />
+      </div>
+      <div class="field">
+        <label>Person</label>
+        ${persons.length === 0
+          ? html`<div class="muted" style="font-size:13px">No people yet.</div>`
+          : html`<${Chips} items=${persons} value=${filters.person_id} allowNone
+              onChange=${(id) => onChange({ ...filters, person_id: id })} />`}
+      </div>
+      <div class="btn-row">
+        <button class="btn danger" onClick=${() => { onChange({ type: filters.type, account_id: null, person_id: null }); onClose(); }}>Clear</button>
+        <button class="btn" onClick=${onClose}>Done</button>
+      </div>
+    <//>
+  `;
+}
 
 export function TransactionsPage() {
   const { month } = useStore();
   const [sheet, setSheet] = useState(null); // null | {} (new) | tx (edit)
   const [refresh, setRefresh] = useState(0);
+  const [query, setQuery] = useState("");
+  const [q, setQ] = useState("");
+  const [filters, setFilters] = useState({ type: null, account_id: null, person_id: null });
+  const [filterOpen, setFilterOpen] = useState(false);
   const [from, to] = monthBounds(month);
 
+  useEffect(() => {
+    const t = setTimeout(() => setQ(query.trim()), 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const active = !!(q || filters.type || filters.account_id || filters.person_id);
+  const filterCount = ["account_id", "person_id"].filter((k) => filters[k]).length;
+
   const { data: txs, loading, error } = useApi(
-    () => api.transactions({ from, to, limit: 1000 }),
-    [month, refresh]
+    () =>
+      active
+        ? api.transactions({ q, type: filters.type, account_id: filters.account_id, person_id: filters.person_id, limit: 500 })
+        : api.transactions({ from, to, limit: 1000 }),
+    [month, refresh, q, filters.type, filters.account_id, filters.person_id]
   );
+
+  function clearAll() {
+    setQuery("");
+    setQ("");
+    setFilters({ type: null, account_id: null, person_id: null });
+  }
 
   const groups = useMemo(() => {
     if (!txs) return [];
@@ -249,18 +423,50 @@ export function TransactionsPage() {
 
   return html`
     <div class="page">
-      <div class="topbar">
-        <${MonthNav} month=${month} onChange=${setMonth} />
+      ${!active &&
+      html`
+        <div class="topbar">
+          <${MonthNav} month=${month} onChange=${setMonth} />
+        </div>
+      `}
+      <div class="searchrow">
+        <div class="searchbar">
+          <input type="text" placeholder="Search notes, categories, accounts, people"
+            value=${query} onInput=${(e) => setQuery(e.target.value)} />
+          ${query && html`<button class="clear" onClick=${() => { setQuery(""); setQ(""); }}>×</button>`}
+        </div>
+        <button class="chip ${filterCount ? "sel" : ""}" onClick=${() => setFilterOpen(true)}>
+          Filters${filterCount ? ` · ${filterCount}` : ""}
+        </button>
       </div>
-      <div class="sumstrip">
-        <div><div class="lab">Income</div><div class="val pos tnum">${fmt(totals.income)}</div></div>
-        <div><div class="lab">Expense</div><div class="val neg tnum">${fmt(totals.expense)}</div></div>
-        <div><div class="lab">Net</div><div class="val tnum">${fmt(totals.net)}</div></div>
+      <div class="chips" style="padding:0 16px 8px">
+        ${[{ id: "expense", name: "Expense" }, { id: "income", name: "Income" }, { id: "transfer", name: "Transfer" }].map(
+          (t) => html`
+            <button class="chip ${filters.type === t.id ? "sel" : ""}"
+              onClick=${() => setFilters({ ...filters, type: filters.type === t.id ? null : t.id })}>
+              ${t.name}
+            </button>
+          `
+        )}
       </div>
+      ${active
+        ? html`
+            <div class="resultline">
+              <span class="muted">${txs?.length ?? 0} results · all time</span>
+              <button class="chip" onClick=${clearAll}>Clear all</button>
+            </div>
+          `
+        : html`
+            <div class="sumstrip">
+              <div><div class="lab">Income</div><div class="val pos tnum">${fmt(totals.income)}</div></div>
+              <div><div class="lab">Expense</div><div class="val neg tnum">${fmt(totals.expense)}</div></div>
+              <div><div class="lab">Net</div><div class="val tnum">${fmt(totals.net)}</div></div>
+            </div>
+          `}
       ${error && html`<div class="card neg">${error}</div>`}
       ${!loading && txs?.length === 0 &&
-      html`<${EmptyState} icon="🧾" title="No transactions this month"
-        sub="Tap + to add one, or tell the chat agent what you spent." />`}
+      html`<${EmptyState} icon=${active ? "🔍" : "🧾"} title=${active ? "No matches" : "No transactions this month"}
+        sub=${active ? "Try different words or clear the filters." : "Tap + to add one, or tell the chat agent what you spent."} />`}
       ${groups.map(([date, list]) => {
         const d = dayLabel(date);
         let dayIncome = 0, dayExpense = 0;
@@ -286,11 +492,14 @@ export function TransactionsPage() {
       })}
       <button class="fab" onClick=${() => setSheet({})} aria-label="Add transaction">+</button>
       ${sheet !== null &&
-      html`<${TxSheet}
-        tx=${sheet.id ? sheet : null}
-        onClose=${() => setSheet(null)}
-        onSaved=${() => { setSheet(null); setRefresh((r) => r + 1); }}
-      />`}
+      (sheet.id
+        ? html`<${TxEditor} tx=${sheet}
+            onClose=${() => setSheet(null)}
+            onSaved=${() => { setSheet(null); setRefresh((r) => r + 1); }} />`
+        : html`<${TxSheet} tx=${null}
+            onClose=${() => setSheet(null)}
+            onSaved=${() => { setSheet(null); setRefresh((r) => r + 1); }} />`)}
+      ${filterOpen && html`<${FilterSheet} filters=${filters} onChange=${setFilters} onClose=${() => setFilterOpen(false)} />`}
     </div>
   `;
 }

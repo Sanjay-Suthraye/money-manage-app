@@ -11,6 +11,7 @@ const SUGGESTIONS = [
 ];
 
 let savedMessages = []; // survives tab switches within the session
+let historyLoaded = false; // server history fetched once per page load
 
 export function ChatPage() {
   const [messages, setMessages] = useState(savedMessages);
@@ -29,6 +30,15 @@ export function ChatPage() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  useEffect(() => {
+    if (historyLoaded || savedMessages.length) return;
+    api.chatHistory().then((rows) => {
+      historyLoaded = true;
+      const msgs = rows.map((r) => ({ role: r.role, text: r.text, attachments: r.attachments }));
+      setMessages((m) => (m.length ? m : msgs)); // user may have already sent something
+    }).catch(() => {});
+  }, []);
 
   function onScroll() {
     const el = scrollRef.current;
@@ -90,9 +100,22 @@ export function ChatPage() {
             return copy;
           });
         },
-        onDone: () => {
+        onDone: (payload) => {
           setBusy(false);
           abortRef.current = null;
+          if (payload?.ok === false) {
+            setMessages((m) => {
+              const copy = [...m];
+              const last = copy[copy.length - 1];
+              if (last?.role === "agent" && !last.text) {
+                copy[copy.length - 1] = {
+                  role: "error",
+                  text: "The agent couldn't respond. Try again or start a new chat.",
+                };
+              }
+              return copy;
+            });
+          }
           if (wroteData) invalidate();
         },
         onError: (msg) => {
@@ -101,10 +124,9 @@ export function ChatPage() {
           setMessages((m) => {
             const copy = [...m];
             const last = copy[copy.length - 1];
-            copy[copy.length - 1] = {
-              ...last,
-              text: last.text || `⚠️ ${msg}`,
-            };
+            const errBubble = { role: "error", text: msg };
+            if (last?.role === "agent" && !last.text) copy[copy.length - 1] = errBubble;
+            else copy.push(errBubble); // keep the partial reply, error after it
             return copy;
           });
         },

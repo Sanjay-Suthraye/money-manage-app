@@ -4,7 +4,8 @@ import { fmt, fmtWhole, monthBounds, shiftMonth, shortMonth } from "../format.js
 import { setMonth } from "../store.js";
 import { EmptyState, MonthNav, Seg, Sheet, useApi, useStore } from "../components/ui.js";
 import { applyChartDefaults, cssVar, inrTick, onThemeChange, seriesColor } from "../chartTheme.js";
-import { TxRow, TxSheet } from "./transactions.js";
+import { TxEditor, TxRow } from "./transactions.js";
+import { ManageCategoriesSheet } from "./categories.js";
 
 const MAX_SLICES = 7; // beyond this, fold into "Other" (8th slot)
 
@@ -263,7 +264,7 @@ function DrillSheet({ month, kind, slice, onClose }) {
         ${(txs || []).map((tx) => html`<${TxRow} key=${tx.id} tx=${tx} onClick=${() => setEditTx(tx)} />`)}
       </div>
       ${editTx &&
-      html`<${TxSheet} tx=${editTx} onClose=${() => setEditTx(null)}
+      html`<${TxEditor} tx=${editTx} onClose=${() => setEditTx(null)}
         onSaved=${() => { setEditTx(null); setRefresh((r) => r + 1); }} />`}
     <//>
   `;
@@ -273,6 +274,7 @@ export function StatsPage() {
   const { month } = useStore();
   const [kind, setKind] = useState("expense");
   const [drill, setDrill] = useState(null);
+  const [manageCats, setManageCats] = useState(false);
   const [from, to] = monthBounds(month);
   const lastMonth = shiftMonth(month, -1);
 
@@ -287,6 +289,9 @@ export function StatsPage() {
     <div class="page">
       <div class="topbar">
         <${MonthNav} month=${month} onChange=${setMonth} />
+        <button class="gearbtn" onClick=${() => setManageCats(true)} aria-label="Manage categories">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
       </div>
       <${Seg}
         options=${[
@@ -304,6 +309,7 @@ export function StatsPage() {
       <${TrendLine} month=${month} thisDays=${thisDays} lastDays=${lastDays} />
       ${drill &&
       html`<${DrillSheet} month=${month} kind=${kind} slice=${drill} onClose=${() => setDrill(null)} />`}
+      ${manageCats && html`<${ManageCategoriesSheet} onClose=${() => setManageCats(false)} />`}
     </div>
   `;
 }

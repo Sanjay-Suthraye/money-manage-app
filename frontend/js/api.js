@@ -33,11 +33,20 @@ export const api = {
   login: (username, password) => request("/auth/login", { method: "POST", body: { username, password } }),
   logout: () => request("/auth/logout", { method: "POST" }),
 
-  accounts: () => request("/accounts"),
+  accounts: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "")
+    );
+    return request(`/accounts${qs.size ? `?${qs}` : ""}`);
+  },
   createAccount: (data) => request("/accounts", { method: "POST", body: data }),
   updateAccount: (id, patch) => request(`/accounts/${id}`, { method: "PATCH", body: patch }),
 
   categories: () => request("/categories"),
+  createCategory: (data) => request("/categories", { method: "POST", body: data }),
+  updateCategory: (id, patch) => request(`/categories/${id}`, { method: "PATCH", body: patch }),
+  deleteCategory: (id, reassignTo) =>
+    request(`/categories/${id}${reassignTo ? `?reassign_to=${reassignTo}` : ""}`, { method: "DELETE" }),
 
   transactions: (params = {}) => {
     const qs = new URLSearchParams(
@@ -61,6 +70,7 @@ export const api = {
     request(`/summary/categories?from=${from}&to=${to}&kind=${kind}`),
 
   chatReset: () => request("/chat/reset", { method: "POST" }),
+  chatHistory: () => request("/chat/history"),
 
   uploadChatFile: async (file) => {
     const form = new FormData();
@@ -78,6 +88,7 @@ export const api = {
 
 /* Chat streaming: POST + ReadableStream SSE parsing (EventSource is GET-only). */
 export async function streamChat(message, attachments, { onDelta, onTool, onDone, onError }, signal) {
+  let settled = false; // a done/error callback fired — the turn ended properly
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
@@ -89,6 +100,7 @@ export async function streamChat(message, attachments, { onDelta, onTool, onDone
       notifyUnauthorized(res);
       let detail = res.statusText;
       try { detail = (await res.json()).detail || detail; } catch { /* ignore */ }
+      settled = true;
       onError?.(detail);
       return;
     }
@@ -113,11 +125,13 @@ export async function streamChat(message, attachments, { onDelta, onTool, onDone
         const payload = JSON.parse(data);
         if (event === "delta") onDelta?.(payload.text);
         else if (event === "tool") onTool?.(payload);
-        else if (event === "done") onDone?.(payload);
-        else if (event === "error") onError?.(payload.message);
+        else if (event === "done") { settled = true; onDone?.(payload); }
+        else if (event === "error") { settled = true; onError?.(payload.message); }
       }
     }
+    // Stream ended without a done/error frame (connection drop, server restart).
+    if (!settled) onError?.("Connection lost — the reply may be incomplete.");
   } catch (err) {
-    if (err.name !== "AbortError") onError?.(err.message);
+    if (err.name !== "AbortError" && !settled) onError?.(err.message);
   }
 }

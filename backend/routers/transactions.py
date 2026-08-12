@@ -3,7 +3,8 @@ from sqlalchemy.orm import Session
 
 from backend.db import get_db
 from backend.models import Category
-from backend.schemas import CategoryIn, SplitIn, TransactionIn, TransactionPatch
+from backend.schemas import CategoryIn, CategoryPatch, SplitIn, TransactionIn, TransactionPatch
+from backend.services import categories as cat_svc
 from backend.services import transactions as svc
 
 router = APIRouter(prefix="/api", tags=["transactions"])
@@ -70,6 +71,17 @@ def list_categories(db: Session = Depends(get_db)):
         }
         for p in parents
     ]
+
+
+@router.patch("/categories/{cat_id}")
+def update_category(cat_id: int, patch: CategoryPatch, db: Session = Depends(get_db)):
+    return cat_svc.update_category(db, cat_id, patch)
+
+
+@router.delete("/categories/{cat_id}")
+def delete_category(cat_id: int, reassign_to: int | None = None, db: Session = Depends(get_db)):
+    # 200 (not 204) so the UI can toast how many transactions moved.
+    return cat_svc.delete_category(db, cat_id, reassign_to)
 
 
 @router.post("/categories", status_code=201)

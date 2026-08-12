@@ -3,7 +3,7 @@ import { api } from "../api.js";
 import { fmt, todayISO } from "../format.js";
 import { invalidate } from "../store.js";
 import { AmountInput, Chips, Sheet, toast, useApi, useStore } from "../components/ui.js";
-import { TxRow, TxSheet } from "./transactions.js";
+import { TxEditor, TxRow } from "./transactions.js";
 
 const GROUPS = [
   { type: "cash", label: "Cash" },
@@ -69,8 +69,99 @@ function PayCardSheet({ card, onClose, onSaved }) {
   `;
 }
 
+/* Edit name/type/card fields, or archive. Small by design: balances are
+   derived, so only metadata is editable here. */
+function EditAccountSheet({ account, onClose, onSaved }) {
+  const [name, setName] = useState(account.name);
+  const [type, setType] = useState(account.type);
+  const [statementDay, setStatementDay] = useState(account.statement_day ?? "");
+  const [dueDay, setDueDay] = useState(account.due_day ?? "");
+  const [creditLimit, setCreditLimit] = useState(account.credit_limit ?? "");
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const patch = {};
+      if (name.trim() && name.trim() !== account.name) patch.name = name.trim();
+      if (type !== account.type) patch.type = type;
+      if (type === "credit_card") {
+        if (String(account.statement_day ?? "") !== String(statementDay)) {
+          patch.statement_day = statementDay ? Number(statementDay) : null;
+        }
+        if (String(account.due_day ?? "") !== String(dueDay)) {
+          patch.due_day = dueDay ? Number(dueDay) : null;
+        }
+        if (String(account.credit_limit ?? "") !== String(creditLimit)) {
+          patch.credit_limit = creditLimit ? Number(creditLimit) : null;
+        }
+      }
+      if (Object.keys(patch).length) await api.updateAccount(account.id, patch);
+      invalidate();
+      toast("Account updated");
+      onSaved();
+    } catch (err) {
+      toast(err.message);
+      setSaving(false);
+    }
+  }
+
+  async function toggleArchive() {
+    setSaving(true);
+    try {
+      await api.updateAccount(account.id, { is_archived: !account.is_archived });
+      invalidate();
+      toast(account.is_archived ? "Account restored" : "Account archived");
+      onSaved();
+    } catch (err) {
+      toast(err.message);
+      setSaving(false);
+    }
+  }
+
+  const dayInput = (label, value, setter) => html`
+    <div class="field" style="flex:1">
+      <label>${label}</label>
+      <input type="number" min="1" max="31" value=${value} placeholder="—"
+        onInput=${(e) => setter(e.target.value.replace(/[^\d]/g, ""))} />
+    </div>
+  `;
+
+  return html`
+    <${Sheet} onClose=${onClose}>
+      <h2>Edit account</h2>
+      <div class="field">
+        <label>Name</label>
+        <input type="text" value=${name} onInput=${(e) => setName(e.target.value)} />
+      </div>
+      <div class="field">
+        <label>Type</label>
+        <${Chips} items=${GROUPS.map((g) => ({ id: g.type, name: g.label }))} value=${type} onChange=${setType} />
+      </div>
+      ${type === "credit_card" &&
+      html`
+        <div style="display:flex; gap:10px">
+          ${dayInput("Statement day", statementDay, setStatementDay)}
+          ${dayInput("Due day", dueDay, setDueDay)}
+        </div>
+        <div class="field">
+          <label>Credit limit</label>
+          <${AmountInput} value=${String(creditLimit)} onChange=${setCreditLimit} currency="INR" />
+        </div>
+      `}
+      <div class="btn-row">
+        <button class="btn danger" disabled=${saving} onClick=${toggleArchive}>
+          ${account.is_archived ? "Unarchive" : "Archive"}
+        </button>
+        <button class="btn" disabled=${!name.trim() || saving} onClick=${save}>Save changes</button>
+      </div>
+    <//>
+  `;
+}
+
 function AccountDetail({ account, onClose }) {
   const [editTx, setEditTx] = useState(null);
+  const [editing, setEditing] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const { data: txs } = useApi(
     () => api.transactions({ account_id: account.id, limit: 100 }),
@@ -80,14 +171,20 @@ function AccountDetail({ account, onClose }) {
     <${Sheet} onClose=${onClose}>
       <div class="spread" style="margin-bottom:4px">
         <h2 style="margin:0">${account.name}</h2>
-        <div class="amt tnum" style="font-weight:700; font-size:18px">${fmt(account.balance)}</div>
+        <div class="row" style="display:flex; align-items:center; gap:10px">
+          <button class="chip" onClick=${() => setEditing(true)}>Edit</button>
+          <div class="amt tnum" style="font-weight:700; font-size:18px">${fmt(account.balance)}</div>
+        </div>
       </div>
       <div class="muted" style="font-size:13px; margin-bottom:10px">Recent transactions</div>
       ${(txs || []).map((tx) => html`<${TxRow} key=${tx.id} tx=${tx} onClick=${() => setEditTx(tx)} />`)}
       ${txs?.length === 0 && html`<div class="muted" style="padding:16px 0">No transactions yet.</div>`}
       ${editTx &&
-      html`<${TxSheet} tx=${editTx} onClose=${() => setEditTx(null)}
+      html`<${TxEditor} tx=${editTx} onClose=${() => setEditTx(null)}
         onSaved=${() => { setEditTx(null); setRefresh((r) => r + 1); }} />`}
+      ${editing &&
+      html`<${EditAccountSheet} account=${account} onClose=${() => setEditing(false)}
+        onSaved=${() => { setEditing(false); onClose(); }} />`}
     <//>
   `;
 }
@@ -144,10 +241,12 @@ export function AccountsPage() {
   const [payCard, setPayCard] = useState(null);
   const [detail, setDetail] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  const { data: accounts } = useApi(() => api.accounts(), [refresh, store.accounts]);
+  const { data: accounts } = useApi(() => api.accounts({ include_archived: true }), [refresh, store.accounts]);
 
-  const list = accounts || [];
+  const list = (accounts || []).filter((a) => !a.is_archived);
+  const archived = (accounts || []).filter((a) => a.is_archived);
   const netWorth = list.reduce((sum, a) => sum + a.balance, 0);
 
   return html`
@@ -182,6 +281,26 @@ export function AccountsPage() {
           </div>
         `;
       })}
+      ${archived.length > 0 &&
+      html`
+        <button class="section-title" style="background:none; width:100%; text-align:left; cursor:pointer"
+          onClick=${() => setShowArchived(!showArchived)}>
+          Archived (${archived.length}) ${showArchived ? "▾" : "▸"}
+        </button>
+        ${showArchived &&
+        html`
+          <div class="card txcard" style="opacity:0.65">
+            ${archived.map((acc) => html`
+              <div class="acct" key=${acc.id}>
+                <button class="grow row" style="text-align:left" onClick=${() => setDetail(acc)}>
+                  <div class="grow"><div class="name">${acc.name}</div></div>
+                  <div class="bal tnum ${acc.balance < 0 ? "neg" : ""}">${fmt(acc.balance)}</div>
+                </button>
+              </div>
+            `)}
+          </div>
+        `}
+      `}
       <button class="fab" onClick=${() => setAdding(true)} aria-label="Add account">+</button>
       ${payCard && html`<${PayCardSheet} card=${payCard} onClose=${() => setPayCard(null)}
         onSaved=${() => { setPayCard(null); setRefresh((r) => r + 1); }} />`}

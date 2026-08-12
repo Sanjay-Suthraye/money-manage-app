@@ -160,7 +160,14 @@ def list_transactions(
     if tx_type:
         stmt = stmt.where(Transaction.type == tx_type)
     if q:
-        stmt = stmt.where(Transaction.note.ilike(f"%{q}%"))
+        like = f"%{q}%"
+        stmt = stmt.where(or_(
+            Transaction.note.ilike(like),
+            Transaction.category_id.in_(select(Category.id).where(Category.name.ilike(like))),
+            Transaction.account_id.in_(select(Account.id).where(Account.name.ilike(like))),
+            Transaction.to_account_id.in_(select(Account.id).where(Account.name.ilike(like))),
+            Transaction.person_id.in_(select(Person.id).where(Person.name.ilike(like))),
+        ))
     stmt = stmt.order_by(Transaction.date.desc(), Transaction.id.desc()).limit(limit).offset(offset)
     return [tx_to_dict(tx) for tx in db.scalars(stmt).all()]
 

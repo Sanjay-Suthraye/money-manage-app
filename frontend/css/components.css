@@ -183,6 +183,7 @@
 }
 .bubble.user { background: var(--accent); color: var(--accent-ink); margin-left: auto; border-bottom-right-radius: 5px; }
 .bubble.agent { background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 5px; }
+.bubble.error { background: var(--surface); border: 1px solid var(--danger); color: var(--danger); border-bottom-left-radius: 5px; }
 .bubble.tool {
   background: var(--surface-2);
   border: 1px dashed var(--baseline);
@@ -254,6 +255,45 @@
 /* ---- Empty state ---- */
 .empty { text-align: center; padding: 48px 24px; color: var(--muted); }
 .empty .big { font-size: 40px; margin-bottom: 10px; }
+
+/* ---- Search & filters ---- */
+.searchrow { display: flex; gap: 8px; align-items: center; padding: 8px 16px; }
+.searchbar {
+  flex: 1; display: flex; align-items: center;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2);
+  padding: 0 12px;
+}
+.searchbar input { flex: 1; padding: 9px 0; background: none; font-size: 16px; }
+.searchbar .clear { color: var(--muted); font-size: 18px; font-weight: 700; padding: 0 2px; }
+.resultline { display: flex; justify-content: space-between; align-items: center; padding: 4px 16px 10px; font-size: 13px; }
+
+/* ---- Split badge ---- */
+.split-badge {
+  font-size: 10.5px; font-weight: 650; padding: 1px 6px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+  margin-left: 6px; vertical-align: 1px;
+}
+
+/* ---- Category management ---- */
+.gearbtn {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center; color: var(--muted);
+}
+.gearbtn:active { background: var(--surface-2); }
+.swatches { display: flex; gap: 10px; flex-wrap: wrap; }
+.swatch {
+  width: 26px; height: 26px; border-radius: 50%; display: inline-block; flex: none;
+  border: 1px solid var(--border);
+}
+.swatch.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
+.catrow {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 2px; border-bottom: 1px solid var(--grid); font-size: 15px;
+}
+.catrow:last-child { border-bottom: none; }
+.catrow.child { padding-left: 26px; font-size: 14px; color: var(--ink-2); }
+.catrow .swatch { width: 14px; height: 14px; }
+.catrow .grow { flex: 1; }
 
 /* ---- Login ---- */
 .login-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
