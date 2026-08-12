@@ -394,12 +394,12 @@ def analyze(headers: list[str], body: list[list], mapping: dict[str, str],
 # Commit
 # ---------------------------------------------------------------------------
 
-def _get_or_create_account(db: Session, cache: dict, name: str,
+def _get_or_create_account(db: Session, user_id: int, cache: dict, name: str,
                            type_overrides: dict[str, str], created: dict) -> Account:
     key = name.lower()
     if key in cache:
         return cache[key]
-    acc = db.scalar(select(Account).where(Account.name.ilike(name)))
+    acc = db.scalar(select(Account).where(Account.name.ilike(name), Account.user_id == user_id))
     if not acc:
         wanted = type_overrides.get(key)
         if wanted not in ACCOUNT_TYPES:
@@ -407,7 +407,7 @@ def _get_or_create_account(db: Session, cache: dict, name: str,
             wanted = ("credit_card" if "card" in low or "credit" in low else
                       "cash" if low == "cash" else
                       "wallet" if "wallet" in low or "paytm" in low or "upi" in low else "bank")
-        acc = Account(name=name, type=wanted)
+        acc = Account(user_id=user_id, name=name, type=wanted)
         db.add(acc)
         db.flush()
         created[name] = wanted
@@ -415,13 +415,14 @@ def _get_or_create_account(db: Session, cache: dict, name: str,
     return acc
 
 
-def _get_or_create_person(db: Session, cache: dict, name: str, created: list) -> Person:
+def _get_or_create_person(db: Session, user_id: int, cache: dict, name: str, created: list) -> Person:
     key = name.strip().lower()
     if key in cache:
         return cache[key]
-    person = db.scalar(select(Person).where(Person.name.ilike(name.strip())))
+    person = db.scalar(select(Person).where(
+        Person.name.ilike(name.strip()), Person.user_id == user_id))
     if not person:
-        person = Person(name=name.strip())
+        person = Person(user_id=user_id, name=name.strip())
         db.add(person)
         db.flush()
         created.append(person.name)
@@ -429,23 +430,25 @@ def _get_or_create_person(db: Session, cache: dict, name: str, created: list) ->
     return person
 
 
-def _get_or_create_category(db: Session, cache: dict, name: str, kind: str,
+def _get_or_create_category(db: Session, user_id: int, cache: dict, name: str, kind: str,
                             parent_id: int | None, created: list) -> Category:
     key = (name.lower(), kind, parent_id)
     if key in cache:
         return cache[key]
     cat = db.scalar(
         select(Category).where(Category.name.ilike(name), Category.kind == kind,
+                               Category.user_id == user_id,
                                Category.parent_id.is_(None) if parent_id is None
                                else Category.parent_id == parent_id)
     )
     if not cat:
         if parent_id is None:
-            count = len(db.scalars(select(Category.id).where(Category.parent_id.is_(None))).all())
-            cat = Category(name=name, kind=kind, color_slot=count % 8)
+            count = len(db.scalars(select(Category.id).where(
+                Category.parent_id.is_(None), Category.user_id == user_id)).all())
+            cat = Category(user_id=user_id, name=name, kind=kind, color_slot=count % 8)
         else:
             parent = db.get(Category, parent_id)
-            cat = Category(name=name, kind=kind, parent_id=parent_id,
+            cat = Category(user_id=user_id, name=name, kind=kind, parent_id=parent_id,
                            color_slot=parent.color_slot if parent else 0)
         db.add(cat)
         db.flush()
@@ -454,7 +457,7 @@ def _get_or_create_category(db: Session, cache: dict, name: str, kind: str,
     return cat
 
 
-def commit_import(db: Session, filename: str, headers: list[str], body: list[list],
+def commit_import(db: Session, user_id: int, filename: str, headers: list[str], body: list[list],
                   mapping: dict[str, str],
                   account_types: dict[str, str] | None = None,
                   person_accounts: dict[str, dict] | None = None) -> dict:
@@ -476,9 +479,10 @@ def commit_import(db: Session, filename: str, headers: list[str], body: list[lis
     dates = sorted(r.date for r in parsed.rows)
     fingerprint = (f"{len(body)}:{dates[0] if dates else ''}:{dates[-1] if dates else ''}:"
                    f"{sum(to_minor(r.inr) for r in parsed.rows)}")
-    duplicate_of = db.scalar(select(ImportBatch).where(ImportBatch.fingerprint == fingerprint))
+    duplicate_of = db.scalar(select(ImportBatch).where(
+        ImportBatch.fingerprint == fingerprint, ImportBatch.user_id == user_id))
 
-    batch = ImportBatch(filename=filename, row_count=0, fingerprint=fingerprint)
+    batch = ImportBatch(user_id=user_id, filename=filename, row_count=0, fingerprint=fingerprint)
     db.add(batch)
     db.flush()
 
@@ -493,7 +497,7 @@ def commit_import(db: Session, filename: str, headers: list[str], body: list[lis
     transfer_count = 0
 
     def account_of(name: str) -> Account:
-        return _get_or_create_account(db, acc_cache, name, type_overrides, created_accounts)
+        return _get_or_create_account(db, user_id, acc_cache, name, type_overrides, created_accounts)
 
     pending: list[tuple[str, Transaction]] = []
 
@@ -501,15 +505,16 @@ def commit_import(db: Session, filename: str, headers: list[str], body: list[lis
         acc = account_of(row.account)
         category_id = None
         if tx_type in ("income", "expense") and row.category:
-            parent = _get_or_create_category(db, cat_cache, row.category, tx_type,
+            parent = _get_or_create_category(db, user_id, cat_cache, row.category, tx_type,
                                              None, created_categories)
             category_id = parent.id
             if row.subcategory:
-                child = _get_or_create_category(db, cat_cache, row.subcategory, tx_type,
+                child = _get_or_create_category(db, user_id, cat_cache, row.subcategory, tx_type,
                                                 parent.id, created_categories)
                 category_id = child.id
         note = ((row.note or "") + note_suffix).strip() or None
         return Transaction(
+            user_id=user_id,
             type=tx_type, date=row.date, account_id=acc.id, category_id=category_id,
             amount_minor=to_minor(row.amount), currency=row.currency,
             inr_minor=to_minor(row.inr), note=note, import_batch_id=batch.id,
@@ -536,14 +541,15 @@ def commit_import(db: Session, filename: str, headers: list[str], body: list[lis
             continue
         if dst_pseudo:  # real -> person
             kind = "lend" if dst_pseudo["owes"] == "me" else "repay_out"
-            person = _get_or_create_person(db, person_cache, dst_pseudo["person"], created_persons)
+            person = _get_or_create_person(db, user_id, person_cache, dst_pseudo["person"], created_persons)
             acc = account_of(spec.src)
         elif src_pseudo:  # person -> real
             kind = "repay_in" if src_pseudo["owes"] == "me" else "borrow"
-            person = _get_or_create_person(db, person_cache, src_pseudo["person"], created_persons)
+            person = _get_or_create_person(db, user_id, person_cache, src_pseudo["person"], created_persons)
             acc = account_of(spec.dst)
         else:
             pending.append((row.sort_key, Transaction(
+                user_id=user_id,
                 type="transfer", date=row.date,
                 account_id=account_of(spec.src).id, to_account_id=account_of(spec.dst).id,
                 amount_minor=to_minor(row.amount), currency=row.currency,
@@ -553,6 +559,7 @@ def commit_import(db: Session, filename: str, headers: list[str], body: list[lis
             continue
         loan_counts[kind] += 1
         pending.append((row.sort_key, Transaction(
+            user_id=user_id,
             type=kind, date=row.date, account_id=acc.id, person_id=person.id,
             amount_minor=to_minor(row.amount), currency=row.currency,
             inr_minor=to_minor(row.inr), note=row.note, import_batch_id=batch.id,

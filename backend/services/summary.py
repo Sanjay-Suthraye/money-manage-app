@@ -24,7 +24,7 @@ def _shift_month(month: str, delta: int) -> str:
     return f"{index // 12:04d}-{index % 12 + 1:02d}"
 
 
-def monthly(db: Session, months: int = 12) -> list[dict]:
+def monthly(db: Session, user_id: int, months: int = 12) -> list[dict]:
     current = date.today().strftime("%Y-%m")
     start_month = _shift_month(current, -(months - 1))
     start = f"{start_month}-01"
@@ -34,7 +34,8 @@ def monthly(db: Session, months: int = 12) -> list[dict]:
             Transaction.type,
             func.sum(Transaction.inr_minor),
         )
-        .where(Transaction.date >= start, Transaction.type.in_(["income", "expense"]))
+        .where(Transaction.date >= start, Transaction.type.in_(["income", "expense"]),
+               Transaction.user_id == user_id)
         .group_by(func.substr(Transaction.date, 1, 7), Transaction.type)
     ).all()
     by_month: dict[str, dict[str, int]] = {}
@@ -57,7 +58,7 @@ def monthly(db: Session, months: int = 12) -> list[dict]:
     return out
 
 
-def days(db: Session, month: str) -> list[dict]:
+def days(db: Session, user_id: int, month: str) -> list[dict]:
     """Per-day income/expense totals for one YYYY-MM month."""
     start, next_start = _month_bounds(month)
     rows = db.execute(
@@ -66,6 +67,7 @@ def days(db: Session, month: str) -> list[dict]:
             Transaction.date >= start,
             Transaction.date < next_start,
             Transaction.type.in_(["income", "expense"]),
+            Transaction.user_id == user_id,
         )
         .group_by(Transaction.date, Transaction.type)
     ).all()
@@ -82,14 +84,15 @@ def days(db: Session, month: str) -> list[dict]:
     ]
 
 
-def networth(db: Session, months: int = 12) -> dict:
+def networth(db: Session, user_id: int, months: int = 12) -> dict:
     """End-of-month total balance across non-archived accounts.
 
     Cash position only: lend/borrow flows move the number (money left the
     accounts) — receivables from people are deliberately not counted. The
     current month's point is the balance to date. Anchored to IST.
     """
-    active_ids = list(db.scalars(select(Account.id).where(Account.is_archived.is_(False))))
+    active_ids = list(db.scalars(select(Account.id).where(
+        Account.is_archived.is_(False), Account.user_id == user_id)))
     opening = db.scalar(
         select(func.coalesce(func.sum(Account.opening_balance_minor), 0))
         .where(Account.id.in_(active_ids))
@@ -130,18 +133,21 @@ def networth(db: Session, months: int = 12) -> dict:
     return {"items": items}
 
 
-def categories(db: Session, date_from: str, date_to: str, kind: str = "expense") -> dict:
+def categories(db: Session, user_id: int, date_from: str, date_to: str,
+               kind: str = "expense") -> dict:
     rows = db.execute(
         select(Transaction.category_id, func.sum(Transaction.inr_minor))
         .where(
             Transaction.date >= date_from,
             Transaction.date <= date_to,
             Transaction.type == kind,
+            Transaction.user_id == user_id,
         )
         .group_by(Transaction.category_id)
     ).all()
 
-    cats = {c.id: c for c in db.scalars(select(Category)).all()}
+    cats = {c.id: c for c in db.scalars(
+        select(Category).where(Category.user_id == user_id)).all()}
     parents: dict[int | None, dict] = {}
     for category_id, total in rows:
         cat = cats.get(category_id)

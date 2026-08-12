@@ -12,10 +12,11 @@ from sqlalchemy import delete, func as sa_func, select
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from backend.agent.client import agent_session
+from backend.agent.client import BusyError, registry
 from backend.agent.tools import UPLOAD_DIR, WRITE_TOOLS
 from backend.db import SessionLocal, get_db
-from backend.models import ChatMessage, Conversation
+from backend.deps import current_user
+from backend.models import ChatMessage, Conversation, User
 
 DEFAULT_TITLE = "New conversation"
 
@@ -77,7 +78,9 @@ def _summarize(name: str, tool_input: dict) -> str:
 
 
 @router.post("/upload")
-async def upload(file: UploadFile):
+async def upload(file: UploadFile, user: User = Depends(current_user)):
+    if not user.chat_enabled:
+        raise HTTPException(403, "Chat is disabled for this account")
     suffix = ("." + file.filename.rsplit(".", 1)[-1].lower()) if file.filename and "." in file.filename else ""
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(422, f"Unsupported file type '{suffix}'. "
@@ -85,9 +88,10 @@ async def upload(file: UploadFile):
     data = await file.read()
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "File too large (20 MB max)")
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    user_dir = UPLOAD_DIR / str(user.id)
+    user_dir.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^\w.\-]", "_", file.filename or "file")
-    path = UPLOAD_DIR / f"{uuid4().hex[:8]}_{safe_name}"
+    path = user_dir / f"{uuid4().hex[:8]}_{safe_name}"
     path.write_bytes(data)
     return {"path": str(path), "filename": file.filename, "size": len(data)}
 
@@ -97,39 +101,17 @@ def _title_from(text: str) -> str:
     return (title[:48] + "…") if len(title) > 48 else (title or DEFAULT_TITLE)
 
 
-def _active_conversation(db: Session) -> Conversation:
+def _active_conversation(db: Session, user_id: int) -> Conversation:
     conv = db.scalar(
-        select(Conversation).where(Conversation.archived_at.is_(None))
+        select(Conversation).where(Conversation.archived_at.is_(None),
+                                   Conversation.user_id == user_id)
         .order_by(Conversation.id.desc())
     )
     if conv is None:
-        conv = Conversation()
+        conv = Conversation(user_id=user_id)
         db.add(conv)
         db.commit()
     return conv
-
-
-def backfill_conversations() -> None:
-    """One-time: attach pre-conversation messages to a single active thread.
-    Called from the app lifespan; idempotent."""
-    db = SessionLocal()
-    try:
-        orphans = db.scalars(
-            select(ChatMessage).where(ChatMessage.conversation_id.is_(None))
-            .order_by(ChatMessage.id)
-        ).all()
-        if not orphans:
-            return
-        conv = _active_conversation(db)
-        if conv.title == DEFAULT_TITLE:
-            first_user = next((m for m in orphans if m.role == "user"), None)
-            if first_user:
-                conv.title = _title_from(first_user.text)
-        for m in orphans:
-            m.conversation_id = conv.id
-        db.commit()
-    finally:
-        db.close()
 
 
 def _save_message(role: str, text: str, conversation_id: int,
@@ -153,36 +135,25 @@ def _compose_prompt(body: ChatIn) -> str:
             f"inspect_file tool before responding:\n{lines}]")
 
 
-async def _abort_orphaned_turn(client) -> None:
-    """After a client disconnect mid-turn: interrupt the CLI and drain its
-    leftover messages so the next chat starts clean. Reset if that fails."""
-    async with agent_session.lock:
-        if agent_session.peek() is not client:
-            return  # already reset/reconnected
-
-        async def _drain():
-            await client.interrupt()
-            async for _ in client.receive_response():
-                pass
-
-        try:
-            await asyncio.wait_for(_drain(), timeout=30)
-        except Exception:
-            await agent_session.reset()
-
-
 @router.post("")
-async def chat(body: ChatIn):
+async def chat(body: ChatIn, user: User = Depends(current_user)):
+    if not user.chat_enabled:
+        raise HTTPException(403, "Chat is disabled for this account")
+    session = registry.get(user.id, user.username)
+
     async def gen():
-        async with agent_session.lock:
+        async with session.lock:
             try:
-                client = await agent_session.get()
+                client = await session.get()
+            except BusyError as exc:
+                yield {"event": "error", "data": json.dumps({"message": str(exc)})}
+                return
             except Exception as exc:
                 yield {"event": "error", "data": json.dumps({"message": str(exc)})}
                 return
             db = SessionLocal()
             try:
-                conv = _active_conversation(db)
+                conv = _active_conversation(db, user.id)
                 if conv.title == DEFAULT_TITLE and body.message.strip():
                     conv.title = _title_from(body.message)
                     db.commit()
@@ -232,11 +203,11 @@ async def chat(body: ChatIn):
                 # generating and its messages would poison the NEXT turn's stream —
                 # interrupt and drain in the background, then re-raise.
                 if not turn_done:
-                    asyncio.get_running_loop().create_task(_abort_orphaned_turn(client))
+                    asyncio.get_running_loop().create_task(session.abort_orphaned_turn(client))
                 raise
             except Exception as exc:
                 # The SDK session may be wedged; drop it so the next message reconnects.
-                await agent_session.reset()
+                await session.reset()
                 yield {"event": "error", "data": json.dumps({"message": str(exc)})}
             finally:
                 # Client disconnect raises CancelledError (not Exception) — keep
@@ -248,11 +219,12 @@ async def chat(body: ChatIn):
 
 
 @router.post("/stop")
-async def stop():
-    """Interrupt the in-flight agent turn. Deliberately does NOT take the
-    session lock — the streaming request holds it; the interrupt is delivered
+async def stop(user: User = Depends(current_user)):
+    """Interrupt the caller's in-flight agent turn. Deliberately does NOT take
+    the session lock — the streaming request holds it; the interrupt is delivered
     through the SDK's control channel and the stream then finishes normally."""
-    client = agent_session.peek()
+    session = registry.peek(user.id)
+    client = session.peek() if session else None
     if client is None:
         return {"ok": False, "detail": "no active session"}
     try:
@@ -276,12 +248,12 @@ def _messages_of(db: Session, conversation_id: int) -> list[dict]:
 
 
 @router.get("/history")
-def history(db: Session = Depends(get_db)):
-    return _messages_of(db, _active_conversation(db).id)
+def history(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return _messages_of(db, _active_conversation(db, user.id).id)
 
 
 @router.get("/conversations")
-def conversations(db: Session = Depends(get_db)):
+def conversations(db: Session = Depends(get_db), user: User = Depends(current_user)):
     counts = dict(db.execute(
         select(ChatMessage.conversation_id, sa_func.count(ChatMessage.id))
         .group_by(ChatMessage.conversation_id)
@@ -290,7 +262,8 @@ def conversations(db: Session = Depends(get_db)):
         select(ChatMessage.conversation_id, sa_func.max(ChatMessage.created_at))
         .group_by(ChatMessage.conversation_id)
     ).all())
-    convs = db.scalars(select(Conversation).order_by(Conversation.id.desc())).all()
+    convs = db.scalars(select(Conversation).where(Conversation.user_id == user.id)
+                       .order_by(Conversation.id.desc())).all()
     out = [
         {"id": c.id, "title": c.title, "active": c.archived_at is None,
          "created_at": str(c.created_at), "archived_at": str(c.archived_at) if c.archived_at else None,
@@ -302,16 +275,19 @@ def conversations(db: Session = Depends(get_db)):
 
 
 @router.get("/conversations/{conv_id}/messages")
-def conversation_messages(conv_id: int, db: Session = Depends(get_db)):
-    if not db.get(Conversation, conv_id):
+def conversation_messages(conv_id: int, db: Session = Depends(get_db),
+                          user: User = Depends(current_user)):
+    conv = db.get(Conversation, conv_id)
+    if not conv or conv.user_id != user.id:
         raise HTTPException(404, f"Conversation {conv_id} not found")
     return _messages_of(db, conv_id)
 
 
 @router.delete("/conversations/{conv_id}", status_code=204)
-def delete_conversation(conv_id: int, db: Session = Depends(get_db)):
+def delete_conversation(conv_id: int, db: Session = Depends(get_db),
+                        user: User = Depends(current_user)):
     conv = db.get(Conversation, conv_id)
-    if not conv:
+    if not conv or conv.user_id != user.id:
         raise HTTPException(404, f"Conversation {conv_id} not found")
     if conv.archived_at is None:
         raise HTTPException(409, "This is the current conversation — use New chat to archive it")
@@ -321,14 +297,15 @@ def delete_conversation(conv_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/reset")
-async def reset():
+async def reset(user: User = Depends(current_user)):
     # Take the lock so a reset can't race an in-flight stream (the frontend
     # aborts first). Archives the current thread instead of deleting it.
-    async with agent_session.lock:
-        await agent_session.reset()
+    session = registry.get(user.id, user.username)
+    async with session.lock:
+        await session.reset()
         db = SessionLocal()
         try:
-            conv = _active_conversation(db)
+            conv = _active_conversation(db, user.id)
             has_messages = db.scalar(
                 select(sa_func.count(ChatMessage.id))
                 .where(ChatMessage.conversation_id == conv.id)

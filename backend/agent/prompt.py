@@ -8,10 +8,13 @@ from backend.models import Account, Category, Person
 from backend.utils import today_ist
 
 
-def build_system_prompt(db: Session) -> str:
-    accounts = db.scalars(select(Account).where(~Account.is_archived).order_by(Account.name)).all()
-    categories = db.scalars(select(Category).order_by(Category.kind, Category.name)).all()
-    persons = db.scalars(select(Person).order_by(Person.name)).all()
+def build_system_prompt(db: Session, user_id: int) -> str:
+    accounts = db.scalars(select(Account).where(
+        ~Account.is_archived, Account.user_id == user_id).order_by(Account.name)).all()
+    categories = db.scalars(select(Category).where(
+        Category.user_id == user_id).order_by(Category.kind, Category.name)).all()
+    persons = db.scalars(select(Person).where(
+        Person.user_id == user_id).order_by(Person.name)).all()
 
     account_lines = "\n".join(f"- {a.name} ({a.type})" for a in accounts) or "- (none yet)"
 

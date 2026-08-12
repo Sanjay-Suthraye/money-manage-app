@@ -299,6 +299,9 @@
   margin-left: 6px; vertical-align: 1px;
 }
 
+.signedin { text-align: center; font-size: 12.5px; padding: 4px 0 12px; }
+.signedin .linkbtn { color: var(--accent); font-weight: 600; font-size: 12.5px; }
+
 .export-row {
   display: block; text-align: center; color: var(--ink-2);
   font-weight: 600; font-size: 14px; padding: 14px; margin-top: 4px;

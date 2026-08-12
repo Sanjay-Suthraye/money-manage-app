@@ -1,6 +1,6 @@
 import { html, render, useEffect, useState } from "./html.js";
 import { api, setUnauthorizedHandler } from "./api.js";
-import { refreshRefData } from "./store.js";
+import { refreshRefData, store } from "./store.js";
 import { ToastHost } from "./components/ui.js";
 import { TransactionsPage } from "./pages/transactions.js";
 import { StatsPage } from "./pages/stats.js";
@@ -60,7 +60,7 @@ function App() {
   `;
 }
 
-function LoginView({ onSuccess }) {
+function LoginView() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
@@ -72,7 +72,9 @@ function LoginView({ onSuccess }) {
     setError(null);
     try {
       await api.login(username.trim(), password);
-      onSuccess();
+      // Full reload wipes module-level caches (chat transcript, ref data) so
+      // nothing leaks between users sharing a browser tab.
+      location.reload();
     } catch (err) {
       setError(err.message);
       setBusy(false);
@@ -122,12 +124,15 @@ function Root() {
     setUnauthorizedHandler(() => setAuth("login"));
     api
       .authMe()
-      .then((s) => setAuth(!s.auth_enabled || s.authenticated ? "ready" : "login"))
+      .then((s) => {
+        store.username = s.username || null;
+        setAuth(s.authenticated ? "ready" : "login");
+      })
       .catch(() => setAuth("ready")); // /me unreachable → let App surface errors
   }, []);
 
   if (auth === "checking") return null;
-  if (auth === "login") return html`<${LoginView} onSuccess=${() => setAuth("ready")} />`;
+  if (auth === "login") return html`<${LoginView} />`;
   return html`<${App} />`;
 }
 

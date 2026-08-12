@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from backend.db import get_db
-from backend.models import Category
+from backend.deps import current_user
+from backend.models import Category, User
 from backend.schemas import CategoryIn, CategoryPatch, SplitIn, TransactionIn, TransactionPatch
 from backend.services import categories as cat_svc
 from backend.services import transactions as svc
@@ -22,37 +23,43 @@ def list_transactions(
     limit: int = Query(default=200, le=1000),
     offset: int = 0,
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     return svc.list_transactions(
-        db, date_from, date_to, account_id, category_id, person_id, type, q, limit, offset
+        db, user.id, date_from, date_to, account_id, category_id, person_id, type, q, limit, offset
     )
 
 
 @router.post("/transactions", status_code=201)
-def create_transactions(data: TransactionIn | list[TransactionIn], db: Session = Depends(get_db)):
+def create_transactions(data: TransactionIn | list[TransactionIn], db: Session = Depends(get_db),
+                        user: User = Depends(current_user)):
     items = data if isinstance(data, list) else [data]
-    created = svc.create_many(db, items)
+    created = svc.create_many(db, user.id, items)
     return created if isinstance(data, list) else created[0]
 
 
 @router.post("/transactions/split", status_code=201)
-def create_split(data: SplitIn, db: Session = Depends(get_db)):
-    return svc.create_split(db, data)
+def create_split(data: SplitIn, db: Session = Depends(get_db),
+                 user: User = Depends(current_user)):
+    return svc.create_split(db, user.id, data)
 
 
 @router.patch("/transactions/{tx_id}")
-def update_transaction(tx_id: int, patch: TransactionPatch, db: Session = Depends(get_db)):
-    return svc.update_transaction(db, tx_id, patch)
+def update_transaction(tx_id: int, patch: TransactionPatch, db: Session = Depends(get_db),
+                       user: User = Depends(current_user)):
+    return svc.update_transaction(db, user.id, tx_id, patch)
 
 
 @router.delete("/transactions/{tx_id}", status_code=204)
-def delete_transaction(tx_id: int, db: Session = Depends(get_db)):
-    svc.delete_transaction(db, tx_id)
+def delete_transaction(tx_id: int, db: Session = Depends(get_db),
+                       user: User = Depends(current_user)):
+    svc.delete_transaction(db, user.id, tx_id)
 
 
 @router.get("/categories")
-def list_categories(db: Session = Depends(get_db)):
-    cats = db.query(Category).order_by(Category.kind, Category.name).all()
+def list_categories(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    cats = (db.query(Category).filter(Category.user_id == user.id)
+            .order_by(Category.kind, Category.name).all())
     parents = [c for c in cats if c.parent_id is None]
     children: dict[int, list[Category]] = {}
     for c in cats:
@@ -74,26 +81,34 @@ def list_categories(db: Session = Depends(get_db)):
 
 
 @router.patch("/categories/{cat_id}")
-def update_category(cat_id: int, patch: CategoryPatch, db: Session = Depends(get_db)):
-    return cat_svc.update_category(db, cat_id, patch)
+def update_category(cat_id: int, patch: CategoryPatch, db: Session = Depends(get_db),
+                    user: User = Depends(current_user)):
+    return cat_svc.update_category(db, user.id, cat_id, patch)
 
 
 @router.delete("/categories/{cat_id}")
-def delete_category(cat_id: int, reassign_to: int | None = None, db: Session = Depends(get_db)):
+def delete_category(cat_id: int, reassign_to: int | None = None, db: Session = Depends(get_db),
+                    user: User = Depends(current_user)):
     # 200 (not 204) so the UI can toast how many transactions moved.
-    return cat_svc.delete_category(db, cat_id, reassign_to)
+    return cat_svc.delete_category(db, user.id, cat_id, reassign_to)
 
 
 @router.post("/categories", status_code=201)
-def create_category(data: CategoryIn, db: Session = Depends(get_db)):
-    cat = Category(name=data.name.strip(), kind=data.kind, parent_id=data.parent_id)
+def create_category(data: CategoryIn, db: Session = Depends(get_db),
+                    user: User = Depends(current_user)):
+    cat = Category(user_id=user.id, name=data.name.strip(), kind=data.kind,
+                   parent_id=data.parent_id)
     if data.parent_id:
         parent = db.get(Category, data.parent_id)
-        if parent:
-            cat.color_slot = parent.color_slot
-            cat.kind = parent.kind
+        if not parent or parent.user_id != user.id:
+            from fastapi import HTTPException
+            raise HTTPException(422, f"Category {data.parent_id} not found")
+        cat.color_slot = parent.color_slot
+        cat.kind = parent.kind
     else:
-        cat.color_slot = db.query(Category).filter(Category.parent_id.is_(None)).count() % 8
+        cat.color_slot = (db.query(Category)
+                          .filter(Category.parent_id.is_(None), Category.user_id == user.id)
+                          .count() % 8)
     db.add(cat)
     db.commit()
     return {"id": cat.id, "name": cat.name, "kind": cat.kind, "color_slot": cat.color_slot}

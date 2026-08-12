@@ -1,32 +1,51 @@
-"""Lifecycle for the single long-lived agent conversation.
+"""Per-user agent sessions.
 
-Single-user app: one ClaudeSDKClient holds the multi-turn session; an asyncio
-lock serializes chat requests. Auth passes exactly ONE credential into the SDK
-subprocess — the subscription OAuth token by default (ANTHROPIC_API_KEY would
-win precedence and silently switch to pay-per-use billing)."""
+Each user gets their own long-lived ClaudeSDKClient (own lock, own system
+prompt, own MCP server closed over their user_id). The registry caps how many
+sessions may hold a connected CLI subprocess at once — the 1GB server cannot
+survive three Node subprocesses — evicting the least-recently-used idle one.
+Auth passes exactly ONE credential into the SDK subprocess — the subscription
+OAuth token by default (ANTHROPIC_API_KEY would win precedence and silently
+switch to pay-per-use billing)."""
 
 import asyncio
 import os
+import time
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
 from backend import settings
 from backend.agent.prompt import build_system_prompt
-from backend.agent.tools import ALLOWED_TOOL_NAMES, money_server
+from backend.agent.tools import ALLOWED_TOOL_NAMES, build_money_server
 from backend.db import SessionLocal
 
 DISALLOWED = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch",
               "WebFetch", "Task", "NotebookEdit", "TodoWrite", "KillShell", "BashOutput"]
 
+MAX_CONNECTED = 2
+
+
+class BusyError(Exception):
+    """Every allowed agent slot is mid-turn; try again shortly."""
+
 
 class AgentSession:
-    def __init__(self) -> None:
+    def __init__(self, user_id: int, username: str) -> None:
+        self.user_id = user_id
+        self.username = username
         self._client: ClaudeSDKClient | None = None
         self.lock = asyncio.Lock()
+        self.last_used = 0.0
+
+    @property
+    def connected(self) -> bool:
+        return self._client is not None
 
     async def get(self) -> ClaudeSDKClient:
         if self._client is None:
+            await registry.make_room(self.user_id)
             self._client = await self._connect()
+        self.last_used = time.monotonic()
         return self._client
 
     def peek(self) -> ClaudeSDKClient | None:
@@ -51,13 +70,13 @@ class AgentSession:
 
         db = SessionLocal()
         try:
-            system_prompt = build_system_prompt(db)
+            system_prompt = build_system_prompt(db, self.user_id)
         finally:
             db.close()
 
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
-            mcp_servers={"money": money_server},
+            mcp_servers={"money": build_money_server(self.user_id)},
             allowed_tools=ALLOWED_TOOL_NAMES,
             disallowed_tools=DISALLOWED,
             include_partial_messages=True,
@@ -81,5 +100,54 @@ class AgentSession:
                 pass
             self._client = None
 
+    async def abort_orphaned_turn(self, client: ClaudeSDKClient) -> None:
+        """After a client disconnect mid-turn: interrupt the CLI and drain its
+        leftover messages so the next chat starts clean. Reset if that fails."""
+        async with self.lock:
+            if self._client is not client:
+                return  # already reset/reconnected
 
-agent_session = AgentSession()
+            async def _drain():
+                await client.interrupt()
+                async for _ in client.receive_response():
+                    pass
+
+            try:
+                await asyncio.wait_for(_drain(), timeout=30)
+            except Exception:
+                await self.reset()
+
+
+class AgentRegistry:
+    def __init__(self) -> None:
+        self._sessions: dict[int, AgentSession] = {}
+        self._guard = asyncio.Lock()
+
+    def get(self, user_id: int, username: str) -> AgentSession:
+        session = self._sessions.get(user_id)
+        if session is None:
+            session = self._sessions.setdefault(user_id, AgentSession(user_id, username))
+        return session
+
+    def peek(self, user_id: int) -> AgentSession | None:
+        return self._sessions.get(user_id)
+
+    async def make_room(self, for_user_id: int) -> None:
+        """Keep at most MAX_CONNECTED CLI subprocesses alive: disconnect the
+        least-recently-used idle session; if all are mid-turn, refuse."""
+        async with self._guard:
+            while True:
+                others = [s for s in self._sessions.values()
+                          if s.user_id != for_user_id and s.connected]
+                if len(others) < MAX_CONNECTED:
+                    return
+                idle = [s for s in others if not s.lock.locked()]
+                if not idle:
+                    raise BusyError(
+                        "The assistant is busy with other conversations — try again in a minute.")
+                victim = min(idle, key=lambda s: s.last_used)
+                async with victim.lock:
+                    await victim.reset()
+
+
+registry = AgentRegistry()

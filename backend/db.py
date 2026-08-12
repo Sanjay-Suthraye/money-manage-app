@@ -31,6 +31,10 @@ def get_db():
         db.close()
 
 
+_USER_TABLES = ("accounts", "categories", "persons", "import_batches",
+                "transactions", "budgets", "recurring_rules", "conversations")
+
+
 def run_migrations() -> None:
     """Additive column migrations create_all can't do. Idempotent; called from
     the app lifespan after create_all."""
@@ -43,3 +47,12 @@ def run_migrations() -> None:
                 "ALTER TABLE chat_messages ADD COLUMN conversation_id INTEGER "
                 "REFERENCES conversations(id)"
             ))
+        for table in _USER_TABLES:
+            cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+            if cols and "user_id" not in cols:
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN user_id INTEGER REFERENCES users(id)"
+                ))
+                conn.execute(text(
+                    f"CREATE INDEX IF NOT EXISTS ix_{table}_user_id ON {table}(user_id)"
+                ))

@@ -3,6 +3,7 @@ from datetime import date
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.models import INFLOW_TYPES, OUTFLOW_TYPES, Account, Transaction
@@ -10,17 +11,19 @@ from backend.schemas import AccountIn, AccountPatch
 from backend.utils import rupees, to_minor, today_ist
 
 
-def compute_balances(db: Session) -> dict[int, int]:
+def compute_balances(db: Session, user_id: int) -> dict[int, int]:
     """Balance per account id, in paise.
 
     balance = opening + inflows - outflows - transfers out + transfers in
     """
     balances: dict[int, int] = {
-        acc.id: acc.opening_balance_minor for acc in db.scalars(select(Account))
+        acc.id: acc.opening_balance_minor
+        for acc in db.scalars(select(Account).where(Account.user_id == user_id))
     }
 
     by_type = db.execute(
         select(Transaction.account_id, Transaction.type, func.sum(Transaction.inr_minor))
+        .where(Transaction.user_id == user_id)
         .group_by(Transaction.account_id, Transaction.type)
     ).all()
     for account_id, tx_type, total in by_type:
@@ -31,7 +34,7 @@ def compute_balances(db: Session) -> dict[int, int]:
 
     transfers_in = db.execute(
         select(Transaction.to_account_id, func.sum(Transaction.inr_minor))
-        .where(Transaction.type == "transfer")
+        .where(Transaction.type == "transfer", Transaction.user_id == user_id)
         .group_by(Transaction.to_account_id)
     ).all()
     for account_id, total in transfers_in:
@@ -111,9 +114,11 @@ def account_to_dict(acc: Account, balance_minor: int, cycle: dict | None = None)
     }
 
 
-def list_with_balances(db: Session, include_archived: bool = False) -> list[dict]:
-    balances = compute_balances(db)
-    accounts = db.scalars(select(Account).order_by(Account.type, Account.name)).all()
+def list_with_balances(db: Session, user_id: int, include_archived: bool = False) -> list[dict]:
+    balances = compute_balances(db, user_id)
+    accounts = db.scalars(
+        select(Account).where(Account.user_id == user_id).order_by(Account.type, Account.name)
+    ).all()
     today = date.fromisoformat(today_ist())
     return [
         account_to_dict(acc, balances.get(acc.id, 0), card_cycle(db, acc, today))
@@ -122,18 +127,20 @@ def list_with_balances(db: Session, include_archived: bool = False) -> list[dict
     ]
 
 
-def get_account(db: Session, account_id: int) -> Account:
+def get_account(db: Session, user_id: int, account_id: int) -> Account:
     acc = db.get(Account, account_id)
-    if not acc:
+    if not acc or acc.user_id != user_id:
         raise HTTPException(404, f"Account {account_id} not found")
     return acc
 
 
-def create_account(db: Session, data: AccountIn) -> Account:
-    existing = db.scalar(select(Account).where(func.lower(Account.name) == data.name.strip().lower()))
+def create_account(db: Session, user_id: int, data: AccountIn) -> Account:
+    existing = db.scalar(select(Account).where(
+        func.lower(Account.name) == data.name.strip().lower(), Account.user_id == user_id))
     if existing:
         raise HTTPException(409, f"Account '{data.name}' already exists")
     acc = Account(
+        user_id=user_id,
         name=data.name.strip(),
         type=data.type,
         opening_balance_minor=to_minor(data.opening_balance),
@@ -143,12 +150,16 @@ def create_account(db: Session, data: AccountIn) -> Account:
         credit_limit_minor=to_minor(data.credit_limit) if data.credit_limit is not None else None,
     )
     db.add(acc)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()  # accounts.name is globally unique across users
+        raise HTTPException(409, f"Name '{data.name}' is unavailable")
     return acc
 
 
-def update_account(db: Session, account_id: int, patch: AccountPatch) -> Account:
-    acc = get_account(db, account_id)
+def update_account(db: Session, user_id: int, account_id: int, patch: AccountPatch) -> Account:
+    acc = get_account(db, user_id, account_id)
     fields = patch.model_dump(exclude_unset=True)
     if "opening_balance" in fields:
         acc.opening_balance_minor = to_minor(fields.pop("opening_balance"))
@@ -157,12 +168,16 @@ def update_account(db: Session, account_id: int, patch: AccountPatch) -> Account
         acc.credit_limit_minor = to_minor(limit) if limit is not None else None
     for key, value in fields.items():
         setattr(acc, key, value)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()  # accounts.name is globally unique across users
+        raise HTTPException(409, "That name is unavailable")
     return acc
 
 
-def delete_account(db: Session, account_id: int) -> None:
-    acc = get_account(db, account_id)
+def delete_account(db: Session, user_id: int, account_id: int) -> None:
+    acc = get_account(db, user_id, account_id)
     from backend.models import Transaction as Tx
 
     has_tx = db.scalar(
@@ -174,6 +189,7 @@ def delete_account(db: Session, account_id: int) -> None:
     db.commit()
 
 
-def resolve_account(db: Session, name: str) -> Account | None:
+def resolve_account(db: Session, user_id: int, name: str) -> Account | None:
     """Case-insensitive account lookup by name, for the agent tools."""
-    return db.scalar(select(Account).where(func.lower(Account.name) == name.strip().lower()))
+    return db.scalar(select(Account).where(
+        func.lower(Account.name) == name.strip().lower(), Account.user_id == user_id))

@@ -27,15 +27,19 @@ AGENT_USE_API_KEY = (_env.get("AGENT_USE_API_KEY") or "").strip() in {"1", "true
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 DEFAULT_CURRENCY = "INR"
 
-# ---- Auth (single user) ----
+# ---- Auth (multi-user; always enforced, users live in the DB) ----
+# Deprecated: read once by the migration to create the default user, then unused.
 MONEY_USERNAME = _env.get("MONEY_USERNAME")
 MONEY_PASSWORD_HASH = _env.get("MONEY_PASSWORD_HASH")
-MONEY_SESSION_SECRET = _env.get("MONEY_SESSION_SECRET")
-# Secure cookies need HTTPS; set MONEY_COOKIE_SECURE=0 for local http dev.
-MONEY_COOKIE_SECURE = (_env.get("MONEY_COOKIE_SECURE") or "1").strip() not in {"0", "false", "no"}
-# Auth is enforced only when credentials are configured — the local Mac dev
-# setup keeps working without a login until MONEY_* vars are set.
-AUTH_ENABLED = bool(MONEY_USERNAME and MONEY_PASSWORD_HASH and MONEY_SESSION_SECRET)
+
+# With no env secret, sessions are signed with an ephemeral key (all logins
+# reset on restart) — fine for local dev, set MONEY_SESSION_SECRET in prod.
+SESSION_SECRET_PERSISTENT = bool(_env.get("MONEY_SESSION_SECRET"))
+MONEY_SESSION_SECRET = _env.get("MONEY_SESSION_SECRET") or __import__("secrets").token_hex(32)
+# Secure cookies need HTTPS; local plain-http dev (no env secret) defaults off.
+MONEY_COOKIE_SECURE = (
+    _env.get("MONEY_COOKIE_SECURE") or ("1" if SESSION_SECRET_PERSISTENT else "0")
+).strip() not in {"0", "false", "no"}
 
 
 def agent_credential() -> tuple[str, str] | None:

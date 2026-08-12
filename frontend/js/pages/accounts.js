@@ -1,7 +1,7 @@
 import { html, useEffect, useState } from "../html.js";
 import { api } from "../api.js";
 import { fmt, shortDate, todayISO } from "../format.js";
-import { invalidate } from "../store.js";
+import { invalidate, store } from "../store.js";
 import { AmountInput, Chips, Sheet, toast, useApi, useStore } from "../components/ui.js";
 import { TxEditor, TxRow } from "./transactions.js";
 import { isHidden, subscribePending } from "../pendingDelete.js";
@@ -312,6 +312,12 @@ export function AccountsPage() {
         `}
       `}
       <a class="card export-row" href="/api/export.xlsx">⬇ Download Excel export</a>
+      <div class="signedin muted">
+        signed in as <b>${store.username || "…"}</b> ·${" "}
+        <button class="linkbtn" onClick=${async () => { try { await api.logout(); } catch { /* ignore */ } location.reload(); }}>
+          Log out
+        </button>
+      </div>
       <button class="fab" onClick=${() => setAdding(true)} aria-label="Add account">+</button>
       ${payCard && html`<${PayCardSheet} card=${payCard} onClose=${() => setPayCard(null)}
         onSaved=${() => { setPayCard(null); setRefresh((r) => r + 1); }} />`}

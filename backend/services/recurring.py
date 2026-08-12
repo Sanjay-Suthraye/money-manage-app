@@ -54,32 +54,34 @@ def rule_to_dict(rule: RecurringRule) -> dict:
     }
 
 
-def _validate_shape(db: Session, data: RecurringIn, date: str) -> None:
-    tx_svc._validate(db, TransactionIn(
+def _validate_shape(db: Session, user_id: int, data: RecurringIn, date: str) -> None:
+    tx_svc._validate(db, user_id, TransactionIn(
         type=data.type, date=date, account_id=data.account_id,
         to_account_id=data.to_account_id, category_id=data.category_id,
         amount=data.amount,
     ))
 
 
-def _get(db: Session, rule_id: int) -> RecurringRule:
+def _get(db: Session, user_id: int, rule_id: int) -> RecurringRule:
     rule = db.get(RecurringRule, rule_id)
-    if not rule:
+    if not rule or rule.user_id != user_id:
         raise HTTPException(404, f"Recurring rule {rule_id} not found")
     return rule
 
 
-def list_rules(db: Session) -> list[dict]:
+def list_rules(db: Session, user_id: int) -> list[dict]:
     rules = db.scalars(
-        select(RecurringRule).order_by(RecurringRule.is_paused, RecurringRule.next_due)
+        select(RecurringRule).where(RecurringRule.user_id == user_id)
+        .order_by(RecurringRule.is_paused, RecurringRule.next_due)
     ).all()
     return [rule_to_dict(r) for r in rules]
 
 
-def create_rule(db: Session, data: RecurringIn) -> dict:
+def create_rule(db: Session, user_id: int, data: RecurringIn) -> dict:
     next_due = data.next_due or _default_next_due(data.day_of_month)
-    _validate_shape(db, data, next_due)
+    _validate_shape(db, user_id, data, next_due)
     rule = RecurringRule(
+        user_id=user_id,
         description=data.description.strip(),
         type=data.type,
         account_id=data.account_id,
@@ -91,11 +93,11 @@ def create_rule(db: Session, data: RecurringIn) -> dict:
     )
     db.add(rule)
     db.commit()
-    return rule_to_dict(_get(db, rule.id))
+    return rule_to_dict(_get(db, user_id, rule.id))
 
 
-def update_rule(db: Session, rule_id: int, patch: RecurringPatch) -> dict:
-    rule = _get(db, rule_id)
+def update_rule(db: Session, user_id: int, rule_id: int, patch: RecurringPatch) -> dict:
+    rule = _get(db, user_id, rule_id)
     merged = RecurringIn(
         description=patch.description or rule.description,
         type=patch.type or rule.type,
@@ -105,7 +107,7 @@ def update_rule(db: Session, rule_id: int, patch: RecurringPatch) -> dict:
         amount=patch.amount if patch.amount is not None else rupees(rule.amount_minor),
         day_of_month=patch.day_of_month or rule.day_of_month,
     )
-    _validate_shape(db, merged, rule.next_due)
+    _validate_shape(db, user_id, merged, rule.next_due)
     rule.description = merged.description.strip()
     rule.type = merged.type
     rule.account_id = merged.account_id
@@ -119,21 +121,22 @@ def update_rule(db: Session, rule_id: int, patch: RecurringPatch) -> dict:
     if patch.is_paused is not None:
         rule.is_paused = patch.is_paused
     db.commit()
-    return rule_to_dict(_get(db, rule_id))
+    return rule_to_dict(_get(db, user_id, rule_id))
 
 
-def delete_rule(db: Session, rule_id: int) -> None:
-    db.delete(_get(db, rule_id))
+def delete_rule(db: Session, user_id: int, rule_id: int) -> None:
+    db.delete(_get(db, user_id, rule_id))
     db.commit()
 
 
 MAX_DUE_PER_RULE = 3
 
 
-def due_items(db: Session) -> list[dict]:
+def due_items(db: Session, user_id: int) -> list[dict]:
     today = today_ist()
     items = []
-    for rule in db.scalars(select(RecurringRule).where(RecurringRule.is_paused.is_(False))).all():
+    for rule in db.scalars(select(RecurringRule).where(
+            RecurringRule.is_paused.is_(False), RecurringRule.user_id == user_id)).all():
         due = rule.next_due
         count = 0
         while due <= today and count < MAX_DUE_PER_RULE:
@@ -144,8 +147,8 @@ def due_items(db: Session) -> list[dict]:
     return items
 
 
-def confirm(db: Session, rule_id: int, date: str | None) -> dict:
-    rule = _get(db, rule_id)
+def confirm(db: Session, user_id: int, rule_id: int, date: str | None) -> dict:
+    rule = _get(db, user_id, rule_id)
     tx_in = TransactionIn(
         type=rule.type,
         date=date or rule.next_due,
@@ -155,14 +158,14 @@ def confirm(db: Session, rule_id: int, date: str | None) -> dict:
         amount=rupees(rule.amount_minor),
         note=rule.description,
     )
-    created = tx_svc.create_many(db, [tx_in])
+    created = tx_svc.create_many(db, user_id, [tx_in])
     rule.next_due = _advance(rule.next_due, rule.day_of_month)
     db.commit()
     return {"transaction": created[0], "rule": rule_to_dict(rule)}
 
 
-def skip(db: Session, rule_id: int) -> dict:
-    rule = _get(db, rule_id)
+def skip(db: Session, user_id: int, rule_id: int) -> dict:
+    rule = _get(db, user_id, rule_id)
     rule.next_due = _advance(rule.next_due, rule.day_of_month)
     db.commit()
     return {"rule": rule_to_dict(rule)}

@@ -1,54 +1,41 @@
-"""Login/logout + the session-cookie predicate used by the auth middleware.
+"""Login/logout/me against the users table."""
 
-Everything here no-ops when AUTH_ENABLED is off (no MONEY_* credentials in
-.env), which keeps the local no-login setup working unchanged.
-"""
-
-import hmac
 import time
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
 from backend import settings
-from backend.auth import SESSION_TTL_SECONDS, mint_session, verify_password, verify_session
+from backend.auth import DUMMY_HASH, SESSION_TTL_SECONDS, mint_session, verify_password
+from backend.db import get_db
+from backend.deps import COOKIE_NAME, token_username
 from backend.schemas import LoginIn
+from backend.users import get_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-COOKIE_NAME = "money_session"
-
-
-def authenticated(request: Request) -> bool:
-    if not settings.AUTH_ENABLED:
-        return True
-    token = request.cookies.get(COOKIE_NAME)
-    if not token:
-        return False
-    return verify_session(settings.MONEY_SESSION_SECRET, token) == settings.MONEY_USERNAME
 
 
 # Sync handlers on purpose: scrypt + the failure sleep run in the threadpool,
 # not on the event loop.
 @router.post("/login")
-def login(body: LoginIn, response: Response):
-    if not settings.AUTH_ENABLED:
-        return {"ok": True}
-    user_ok = hmac.compare_digest(body.username.encode(), (settings.MONEY_USERNAME or "").encode())
-    pass_ok = verify_password(body.password, settings.MONEY_PASSWORD_HASH or "")
-    if not (user_ok and pass_ok):
+def login(body: LoginIn, response: Response, db: Session = Depends(get_db)):
+    user = get_user(db, body.username.strip().lower())
+    # Unknown usernames still burn a scrypt so timing can't enumerate users.
+    ok = verify_password(body.password, user.password_hash if user else DUMMY_HASH)
+    if not (user and ok):
         time.sleep(0.5)  # throttle guessing
         return JSONResponse({"detail": "Wrong username or password"}, status_code=401)
     response.set_cookie(
         COOKIE_NAME,
-        mint_session(settings.MONEY_SESSION_SECRET, settings.MONEY_USERNAME),
+        mint_session(settings.MONEY_SESSION_SECRET, user.username),
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
         samesite="lax",
         secure=settings.MONEY_COOKIE_SECURE,
         path="/",
     )
-    return {"ok": True, "username": settings.MONEY_USERNAME}
+    return {"ok": True, "username": user.username}
 
 
 @router.post("/logout")
@@ -58,5 +45,11 @@ def logout(response: Response):
 
 
 @router.get("/me")
-def me(request: Request):
-    return {"auth_enabled": settings.AUTH_ENABLED, "authenticated": authenticated(request)}
+def me(request: Request, db: Session = Depends(get_db)):
+    username = token_username(request)
+    user = get_user(db, username) if username else None
+    return {
+        "auth_enabled": True,
+        "authenticated": user is not None,
+        "username": user.username if user else None,
+    }

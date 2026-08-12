@@ -11,9 +11,9 @@ from backend.models import Category, Transaction
 from backend.schemas import CategoryPatch
 
 
-def _get(db: Session, cat_id: int) -> Category:
+def _get(db: Session, user_id: int, cat_id: int) -> Category:
     cat = db.get(Category, cat_id)
-    if not cat:
+    if not cat or cat.user_id != user_id:
         raise HTTPException(404, f"Category {cat_id} not found")
     return cat
 
@@ -33,8 +33,8 @@ def _to_dict(cat: Category) -> dict:
             "color_slot": cat.color_slot, "parent_id": cat.parent_id}
 
 
-def update_category(db: Session, cat_id: int, patch: CategoryPatch) -> dict:
-    cat = _get(db, cat_id)
+def update_category(db: Session, user_id: int, cat_id: int, patch: CategoryPatch) -> dict:
+    cat = _get(db, user_id, cat_id)
     children = _children(db, cat_id)
     if patch.kind is not None and patch.kind != cat.kind:
         ids = [cat.id, *(c.id for c in children)]
@@ -49,6 +49,7 @@ def update_category(db: Session, cat_id: int, patch: CategoryPatch) -> dict:
         clash = db.scalar(
             select(Category).where(
                 func.lower(Category.name) == patch.name.strip().lower(),
+                Category.user_id == user_id,
                 Category.kind == cat.kind,
                 Category.parent_id.is_(None) if cat.parent_id is None else Category.parent_id == cat.parent_id,
                 Category.id != cat.id,
@@ -69,10 +70,10 @@ def update_category(db: Session, cat_id: int, patch: CategoryPatch) -> dict:
     return _to_dict(cat)
 
 
-def delete_category(db: Session, cat_id: int, reassign_to: int | None = None) -> dict:
+def delete_category(db: Session, user_id: int, cat_id: int, reassign_to: int | None = None) -> dict:
     """Delete a category. With reassign_to, move all transactions (including
     the children's) to the target first — that is the merge operation."""
-    cat = _get(db, cat_id)
+    cat = _get(db, user_id, cat_id)
     children = _children(db, cat_id)
     ids = [cat.id, *(c.id for c in children)]
 
@@ -85,7 +86,7 @@ def delete_category(db: Session, cat_id: int, reassign_to: int | None = None) ->
         db.commit()
         return {"moved": 0}
 
-    target = _get(db, reassign_to)
+    target = _get(db, user_id, reassign_to)
     if target.id in ids:
         raise HTTPException(422, "Can't merge a category into itself or its own subcategory")
     if target.kind != cat.kind:

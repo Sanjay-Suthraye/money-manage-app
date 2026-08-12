@@ -13,15 +13,16 @@ from backend.services import summary as summary_svc
 from backend.utils import rupees, to_minor
 
 
-def list_budgets(db: Session, month: str) -> dict:
+def list_budgets(db: Session, user_id: int, month: str) -> dict:
     year, mon = int(month[:4]), int(month[5:7])
     last_day = f"{month}-{calendar.monthrange(year, mon)[1]:02d}"
-    spend = summary_svc.categories(db, f"{month}-01", last_day, "expense")
+    spend = summary_svc.categories(db, user_id, f"{month}-01", last_day, "expense")
     spent_by_id = {item["category_id"]: item["total"] for item in spend["items"]}
 
-    cats = {c.id: c for c in db.scalars(select(Category)).all()}
+    cats = {c.id: c for c in db.scalars(
+        select(Category).where(Category.user_id == user_id)).all()}
     items = []
-    for b in db.scalars(select(Budget)).all():
+    for b in db.scalars(select(Budget).where(Budget.user_id == user_id)).all():
         cat = cats.get(b.category_id)
         # Budget rows whose category vanished/moved/changed kind are inert.
         if cat is None or cat.parent_id is not None or cat.kind != "expense":
@@ -46,23 +47,24 @@ def list_budgets(db: Session, month: str) -> dict:
     }
 
 
-def upsert_budget(db: Session, category_id: int, amount: Decimal) -> None:
+def upsert_budget(db: Session, user_id: int, category_id: int, amount: Decimal) -> None:
     cat = db.get(Category, category_id)
-    if not cat:
+    if not cat or cat.user_id != user_id:
         raise HTTPException(422, f"Category {category_id} not found")
     if cat.parent_id is not None:
         raise HTTPException(422, "Budgets are set on parent categories only")
     if cat.kind != "expense":
         raise HTTPException(422, "Budgets apply to expense categories only")
     if amount == 0:
-        delete_budget(db, category_id)
+        delete_budget(db, user_id, category_id)
         return
-    db.merge(Budget(category_id=category_id, amount_minor=to_minor(amount)))
+    # merge() overwrites unspecified columns — user_id must be included.
+    db.merge(Budget(category_id=category_id, user_id=user_id, amount_minor=to_minor(amount)))
     db.commit()
 
 
-def delete_budget(db: Session, category_id: int) -> None:
+def delete_budget(db: Session, user_id: int, category_id: int) -> None:
     budget = db.get(Budget, category_id)
-    if budget:
+    if budget and budget.user_id == user_id:
         db.delete(budget)
         db.commit()

@@ -39,23 +39,29 @@ def tx_to_dict(tx: Transaction) -> dict:
     }
 
 
-def _validate(db: Session, data: TransactionIn) -> None:
-    if not db.get(Account, data.account_id):
+def _owned(db: Session, model, row_id: int, user_id: int):
+    """Fetch a row only if it belongs to user_id (None otherwise)."""
+    row = db.get(model, row_id)
+    return row if row is not None and row.user_id == user_id else None
+
+
+def _validate(db: Session, user_id: int, data: TransactionIn) -> None:
+    if not _owned(db, Account, data.account_id, user_id):
         raise HTTPException(422, f"Account {data.account_id} not found")
     if data.type == "transfer":
         if not data.to_account_id:
             raise HTTPException(422, "Transfer needs to_account_id")
         if data.to_account_id == data.account_id:
             raise HTTPException(422, "Transfer accounts must differ")
-        if not db.get(Account, data.to_account_id):
+        if not _owned(db, Account, data.to_account_id, user_id):
             raise HTTPException(422, f"Account {data.to_account_id} not found")
     if data.type in LOAN_TYPES:
         if not data.person_id:
             raise HTTPException(422, f"'{data.type}' needs person_id")
-        if not db.get(Person, data.person_id):
+        if not _owned(db, Person, data.person_id, user_id):
             raise HTTPException(422, f"Person {data.person_id} not found")
     if data.category_id:
-        cat = db.get(Category, data.category_id)
+        cat = _owned(db, Category, data.category_id, user_id)
         if not cat:
             raise HTTPException(422, f"Category {data.category_id} not found")
         if data.type in ("income", "expense") and cat.kind != data.type:
@@ -64,11 +70,12 @@ def _validate(db: Session, data: TransactionIn) -> None:
         raise HTTPException(422, "Non-INR transaction needs inr_amount (manual conversion)")
 
 
-def _build(data: TransactionIn, split_group_id: str | None = None,
+def _build(user_id: int, data: TransactionIn, split_group_id: str | None = None,
            import_batch_id: int | None = None) -> Transaction:
     amount_minor = to_minor(data.amount)
     inr_minor = to_minor(data.inr_amount) if data.currency != "INR" else amount_minor
     return Transaction(
+        user_id=user_id,
         type=data.type,
         date=data.date,
         account_id=data.account_id,
@@ -84,16 +91,16 @@ def _build(data: TransactionIn, split_group_id: str | None = None,
     )
 
 
-def create_many(db: Session, items: list[TransactionIn]) -> list[dict]:
+def create_many(db: Session, user_id: int, items: list[TransactionIn]) -> list[dict]:
     for item in items:
-        _validate(db, item)
-    txs = [_build(item) for item in items]
+        _validate(db, user_id, item)
+    txs = [_build(user_id, item) for item in items]
     db.add_all(txs)
     db.commit()
     return [tx_to_dict(_reload(db, tx.id)) for tx in txs]
 
 
-def create_split(db: Session, data: SplitIn) -> list[dict]:
+def create_split(db: Session, user_id: int, data: SplitIn) -> list[dict]:
     group = str(uuid.uuid4())
     expense = TransactionIn(
         type="expense", date=data.date, account_id=data.account_id,
@@ -103,9 +110,10 @@ def create_split(db: Session, data: SplitIn) -> list[dict]:
         type="lend", date=data.date, account_id=data.account_id,
         person_id=data.person_id, amount=data.friend_amount, note=data.note,
     )
-    _validate(db, expense)
-    _validate(db, lend)
-    txs = [_build(expense, split_group_id=group), _build(lend, split_group_id=group)]
+    _validate(db, user_id, expense)
+    _validate(db, user_id, lend)
+    txs = [_build(user_id, expense, split_group_id=group),
+           _build(user_id, lend, split_group_id=group)]
     db.add_all(txs)
     db.commit()
     return [tx_to_dict(_reload(db, tx.id)) for tx in txs]
@@ -126,6 +134,7 @@ def _reload(db: Session, tx_id: int) -> Transaction:
 
 def list_transactions(
     db: Session,
+    user_id: int,
     date_from: str | None = None,
     date_to: str | None = None,
     account_id: int | None = None,
@@ -141,7 +150,7 @@ def list_transactions(
         selectinload(Transaction.to_account),
         selectinload(Transaction.category),
         selectinload(Transaction.person),
-    )
+    ).where(Transaction.user_id == user_id)
     if date_from:
         stmt = stmt.where(Transaction.date >= date_from)
     if date_to:
@@ -163,24 +172,28 @@ def list_transactions(
         like = f"%{q}%"
         stmt = stmt.where(or_(
             Transaction.note.ilike(like),
-            Transaction.category_id.in_(select(Category.id).where(Category.name.ilike(like))),
-            Transaction.account_id.in_(select(Account.id).where(Account.name.ilike(like))),
-            Transaction.to_account_id.in_(select(Account.id).where(Account.name.ilike(like))),
-            Transaction.person_id.in_(select(Person.id).where(Person.name.ilike(like))),
+            Transaction.category_id.in_(select(Category.id).where(
+                Category.name.ilike(like), Category.user_id == user_id)),
+            Transaction.account_id.in_(select(Account.id).where(
+                Account.name.ilike(like), Account.user_id == user_id)),
+            Transaction.to_account_id.in_(select(Account.id).where(
+                Account.name.ilike(like), Account.user_id == user_id)),
+            Transaction.person_id.in_(select(Person.id).where(
+                Person.name.ilike(like), Person.user_id == user_id)),
         ))
     stmt = stmt.order_by(Transaction.date.desc(), Transaction.id.desc()).limit(limit).offset(offset)
     return [tx_to_dict(tx) for tx in db.scalars(stmt).all()]
 
 
-def get_transaction(db: Session, tx_id: int) -> Transaction:
+def get_transaction(db: Session, user_id: int, tx_id: int) -> Transaction:
     tx = _reload(db, tx_id)
-    if not tx:
+    if not tx or tx.user_id != user_id:
         raise HTTPException(404, f"Transaction {tx_id} not found")
     return tx
 
 
-def update_transaction(db: Session, tx_id: int, patch: TransactionPatch) -> dict:
-    tx = get_transaction(db, tx_id)
+def update_transaction(db: Session, user_id: int, tx_id: int, patch: TransactionPatch) -> dict:
+    tx = get_transaction(db, user_id, tx_id)
     merged = TransactionIn(
         type=patch.type or tx.type,
         date=patch.date or tx.date,
@@ -193,8 +206,8 @@ def update_transaction(db: Session, tx_id: int, patch: TransactionPatch) -> dict
         inr_amount=patch.inr_amount if patch.inr_amount is not None else rupees(tx.inr_minor),
         note=patch.note if patch.note is not None else tx.note,
     )
-    _validate(db, merged)
-    built = _build(merged)
+    _validate(db, user_id, merged)
+    built = _build(user_id, merged)
     for field in ("type", "date", "account_id", "to_account_id", "category_id", "person_id",
                   "amount_minor", "currency", "inr_minor", "note"):
         setattr(tx, field, getattr(built, field))
@@ -202,7 +215,7 @@ def update_transaction(db: Session, tx_id: int, patch: TransactionPatch) -> dict
     return tx_to_dict(_reload(db, tx_id))
 
 
-def delete_transaction(db: Session, tx_id: int) -> None:
-    tx = get_transaction(db, tx_id)
+def delete_transaction(db: Session, user_id: int, tx_id: int) -> None:
+    tx = get_transaction(db, user_id, tx_id)
     db.delete(tx)
     db.commit()

@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.models import Person, Transaction
@@ -8,30 +9,41 @@ from backend.services import transactions as tx_service
 from backend.utils import rupees
 
 
-def list_persons(db: Session) -> list[Person]:
-    return db.scalars(select(Person).order_by(Person.name)).all()
+def list_persons(db: Session, user_id: int) -> list[Person]:
+    return db.scalars(
+        select(Person).where(Person.user_id == user_id).order_by(Person.name)
+    ).all()
 
 
-def create_person(db: Session, data: PersonIn) -> Person:
-    existing = resolve_person(db, data.name)
+def create_person(db: Session, user_id: int, data: PersonIn) -> Person:
+    existing = resolve_person(db, user_id, data.name)
     if existing:
         raise HTTPException(409, f"Person '{data.name}' already exists")
-    person = Person(name=data.name.strip(), note=data.note)
+    person = Person(user_id=user_id, name=data.name.strip(), note=data.note)
     db.add(person)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()  # persons.name is globally unique across users
+        raise HTTPException(409, f"Name '{data.name}' is unavailable")
     return person
 
 
-def resolve_person(db: Session, name: str) -> Person | None:
-    return db.scalar(select(Person).where(func.lower(Person.name) == name.strip().lower()))
+def resolve_person(db: Session, user_id: int, name: str) -> Person | None:
+    return db.scalar(select(Person).where(
+        func.lower(Person.name) == name.strip().lower(), Person.user_id == user_id))
 
 
-def get_or_create_person(db: Session, name: str) -> Person:
-    person = resolve_person(db, name)
+def get_or_create_person(db: Session, user_id: int, name: str) -> Person:
+    person = resolve_person(db, user_id, name)
     if not person:
-        person = Person(name=name.strip())
+        person = Person(user_id=user_id, name=name.strip())
         db.add(person)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()  # persons.name is globally unique across users
+            raise HTTPException(409, f"Name '{name}' is unavailable")
     return person
 
 
@@ -42,10 +54,10 @@ def _net_minor(sums: dict[str, int]) -> int:
     )
 
 
-def person_balances(db: Session) -> dict:
+def person_balances(db: Session, user_id: int) -> dict:
     rows = db.execute(
         select(Transaction.person_id, Transaction.type, func.sum(Transaction.inr_minor))
-        .where(Transaction.person_id.is_not(None))
+        .where(Transaction.person_id.is_not(None), Transaction.user_id == user_id)
         .group_by(Transaction.person_id, Transaction.type)
     ).all()
     sums_by_person: dict[int, dict[str, int]] = {}
@@ -58,11 +70,11 @@ def person_balances(db: Session) -> dict:
     last_dates = dict(
         db.execute(
             select(Transaction.person_id, func.max(Transaction.date))
-            .where(Transaction.person_id.is_not(None))
+            .where(Transaction.person_id.is_not(None), Transaction.user_id == user_id)
             .group_by(Transaction.person_id)
         ).all()
     )
-    for person in list_persons(db):
+    for person in list_persons(db, user_id):
         net = _net_minor(sums_by_person.get(person.id, {}))
         if net > 0:
             total_owed_to_me += net
@@ -84,9 +96,9 @@ def person_balances(db: Session) -> dict:
     }
 
 
-def person_ledger(db: Session, person_id: int) -> dict:
+def person_ledger(db: Session, user_id: int, person_id: int) -> dict:
     person = db.get(Person, person_id)
-    if not person:
+    if not person or person.user_id != user_id:
         raise HTTPException(404, f"Person {person_id} not found")
     rows = db.scalars(
         select(Transaction)
@@ -116,7 +128,7 @@ def person_ledger(db: Session, person_id: int) -> dict:
     }
 
 
-def add_loan_entry(db: Session, data: LoanIn) -> dict:
+def add_loan_entry(db: Session, user_id: int, data: LoanIn) -> dict:
     tx_in = TransactionIn(
         type=data.kind,
         date=data.date,
@@ -125,4 +137,4 @@ def add_loan_entry(db: Session, data: LoanIn) -> dict:
         amount=data.amount,
         note=data.note,
     )
-    return tx_service.create_many(db, [tx_in])[0]
+    return tx_service.create_many(db, user_id, [tx_in])[0]

@@ -4,13 +4,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend import settings
+from backend import deps, settings
 from backend.db import engine, run_migrations
 from backend.models import Base
 from backend.routers import (
     accounts, auth, budgets, chat, export, importer, persons, recurring, summary, transactions,
 )
 from backend.settings import FRONTEND_DIR
+from backend.users import ensure_default_user_and_backfill
 
 
 @asynccontextmanager
@@ -19,7 +20,9 @@ async def lifespan(app: FastAPI):
     # freshly-wiped DB isn't repopulated with default categories on restart.
     Base.metadata.create_all(engine)
     run_migrations()
-    chat.backfill_conversations()
+    ensure_default_user_and_backfill()
+    if not settings.SESSION_SECRET_PERSISTENT:
+        print("[auth] MONEY_SESSION_SECRET not set — sessions reset on every restart")
     yield
 
 
@@ -34,17 +37,17 @@ async def no_cache_static(request: Request, call_next):
     return response
 
 
-# Fail-closed: every /api route (present and future) requires a session when
-# auth is configured; /api/auth/* stays open (login must work logged-out).
-# Static files stay public — the login page itself needs them, they hold no data.
+# Fail-closed: every /api route (present and future) requires a valid session
+# token; /api/auth/* stays open (login must work logged-out). Identity (which
+# user) is resolved per-route by deps.current_user. Static files stay public —
+# the login page itself needs them, they hold no data.
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
     path = request.url.path
     if (
-        settings.AUTH_ENABLED
-        and path.startswith("/api")
+        path.startswith("/api")
         and not path.startswith("/api/auth/")
-        and not auth.authenticated(request)
+        and not deps.token_valid(request)
     ):
         return JSONResponse({"detail": "Not authenticated"}, status_code=401)
     return await call_next(request)

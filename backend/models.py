@@ -24,11 +24,26 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    """App login. Every data row is owned by exactly one user (user_id columns
+    are nullable only because SQLite ALTER can't add NOT NULL — the backfill
+    guarantees they are always set)."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(unique=True)
+    password_hash: Mapped[str]  # backend.auth scrypt format
+    chat_enabled: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
 class Account(Base):
     __tablename__ = "accounts"
     __table_args__ = (CheckConstraint(f"type IN {ACCOUNT_TYPES!r}"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None, index=True)
     name: Mapped[str] = mapped_column(unique=True)
     type: Mapped[str]
     opening_balance_minor: Mapped[int] = mapped_column(default=0)
@@ -45,6 +60,7 @@ class Category(Base):
     __table_args__ = (UniqueConstraint("name", "parent_id", "kind"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None, index=True)
     name: Mapped[str]
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), default=None)
     kind: Mapped[str] = mapped_column(default="expense")
@@ -57,6 +73,7 @@ class Person(Base):
     __tablename__ = "persons"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None, index=True)
     name: Mapped[str] = mapped_column(unique=True)
     note: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
@@ -66,6 +83,7 @@ class ImportBatch(Base):
     __tablename__ = "import_batches"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None, index=True)
     filename: Mapped[str]
     imported_at: Mapped[datetime] = mapped_column(server_default=func.now())
     row_count: Mapped[int] = mapped_column(default=0)
@@ -81,6 +99,7 @@ class Transaction(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None, index=True)
     type: Mapped[str] = mapped_column(index=True)
     date: Mapped[str] = mapped_column(index=True)  # ISO YYYY-MM-DD, naive IST
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
@@ -109,6 +128,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None, index=True)
     title: Mapped[str] = mapped_column(default="New conversation")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     archived_at: Mapped[datetime | None] = mapped_column(default=None)
@@ -137,6 +157,7 @@ class Budget(Base):
     __table_args__ = (CheckConstraint("amount_minor > 0"),)
 
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"), primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None, index=True)
     amount_minor: Mapped[int]
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
@@ -154,6 +175,7 @@ class RecurringRule(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None, index=True)
     description: Mapped[str]
     type: Mapped[str]
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))

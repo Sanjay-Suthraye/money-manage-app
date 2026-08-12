@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.db import get_db
-from backend.models import Transaction
+from backend.deps import current_user
+from backend.models import Transaction, User
 from backend.services import accounts as accounts_svc
 from backend.services import loans as loans_svc
 from backend.utils import rupees, today_ist
@@ -29,7 +30,7 @@ def _sheet(ws, headers: list[str], rows: list[list]) -> None:
 
 
 @router.get("/export.xlsx")
-def export_xlsx(db: Session = Depends(get_db)) -> Response:
+def export_xlsx(db: Session = Depends(get_db), user: User = Depends(current_user)) -> Response:
     wb = Workbook()
 
     txs = db.scalars(
@@ -40,6 +41,7 @@ def export_xlsx(db: Session = Depends(get_db)) -> Response:
             selectinload(Transaction.category),
             selectinload(Transaction.person),
         )
+        .where(Transaction.user_id == user.id)
         .order_by(Transaction.date, Transaction.id)
     ).all()
     ws = wb.active
@@ -62,7 +64,7 @@ def export_xlsx(db: Session = Depends(get_db)) -> Response:
         for cell in ws[col][1:]:
             cell.number_format = "#,##0.00"
 
-    accounts = accounts_svc.list_with_balances(db, include_archived=True)
+    accounts = accounts_svc.list_with_balances(db, user.id, include_archived=True)
     _sheet(
         wb.create_sheet("Accounts"),
         ["name", "type", "currency", "balance", "outstanding", "archived"],
@@ -70,7 +72,7 @@ def export_xlsx(db: Session = Depends(get_db)) -> Response:
           a["is_archived"]] for a in accounts],
     )
 
-    people = loans_svc.person_balances(db)
+    people = loans_svc.person_balances(db, user.id)
     ws_p = wb.create_sheet("People")
     _sheet(
         ws_p,

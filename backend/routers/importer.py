@@ -5,8 +5,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from backend.db import get_db
+from backend.deps import current_user
 from backend.importer import moneymanager as mm
-from backend.models import ImportBatch, Transaction
+from backend.models import ImportBatch, Transaction, User
 
 router = APIRouter(prefix="/api/import", tags=["import"])
 
@@ -47,34 +48,37 @@ async def commit(
     account_types: str | None = Form(default=None),
     person_accounts: str | None = Form(default=None),
     db: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ):
     headers, body = _read(await file.read())
     mapping_dict = _json_form(mapping, "mapping")
     if "date" not in mapping_dict or "row_type" not in mapping_dict:
         raise HTTPException(422, "mapping needs at least 'date' and 'row_type'")
     return mm.commit_import(
-        db, file.filename or "import.xlsx", headers, body, mapping_dict,
+        db, user.id, file.filename or "import.xlsx", headers, body, mapping_dict,
         account_types=_json_form(account_types, "account_types"),
         person_accounts=_json_form(person_accounts, "person_accounts"),
     )
 
 
 @router.get("/batches")
-def batches(db: Session = Depends(get_db)):
+def batches(db: Session = Depends(get_db), user: User = Depends(current_user)):
     return [
         {"id": b.id, "filename": b.filename, "imported_at": str(b.imported_at),
          "row_count": b.row_count}
-        for b in db.scalars(select(ImportBatch).order_by(ImportBatch.id.desc()))
+        for b in db.scalars(select(ImportBatch).where(ImportBatch.user_id == user.id)
+                            .order_by(ImportBatch.id.desc()))
     ]
 
 
 @router.delete("/{batch_id}")
-def undo(batch_id: int, db: Session = Depends(get_db)):
+def undo(batch_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     batch = db.get(ImportBatch, batch_id)
-    if not batch:
+    if not batch or batch.user_id != user.id:
         raise HTTPException(404, f"Import batch {batch_id} not found")
     deleted = db.execute(
-        delete(Transaction).where(Transaction.import_batch_id == batch_id)
+        delete(Transaction).where(Transaction.import_batch_id == batch_id,
+                                  Transaction.user_id == user.id)
     ).rowcount
     db.delete(batch)
     db.commit()
