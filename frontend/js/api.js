@@ -64,6 +64,19 @@ export const api = {
   personLedger: (id) => request(`/persons/${id}/ledger`),
   addLoan: (data) => request("/persons/loan", { method: "POST", body: data }),
 
+  budgets: (month) => request(`/budgets${month ? `?month=${month}` : ""}`),
+  setBudget: (categoryId, amount) => request(`/budgets/${categoryId}`, { method: "PUT", body: { amount } }),
+  deleteBudget: (categoryId) => request(`/budgets/${categoryId}`, { method: "DELETE" }),
+
+  recurring: () => request("/recurring"),
+  recurringDue: () => request("/recurring/due"),
+  createRecurring: (data) => request("/recurring", { method: "POST", body: data }),
+  updateRecurring: (id, patch) => request(`/recurring/${id}`, { method: "PATCH", body: patch }),
+  deleteRecurring: (id) => request(`/recurring/${id}`, { method: "DELETE" }),
+  confirmRecurring: (id, date) => request(`/recurring/${id}/confirm`, { method: "POST", body: { date } }),
+  skipRecurring: (id) => request(`/recurring/${id}/skip`, { method: "POST", body: {} }),
+
+  summaryNetworth: (months = 12) => request(`/summary/networth?months=${months}`),
   summaryMonthly: (months = 12) => request(`/summary/monthly?months=${months}`),
   summaryDays: (month) => request(`/summary/days?month=${month}`),
   summaryCategories: (from, to, kind = "expense") =>

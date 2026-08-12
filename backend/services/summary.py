@@ -7,8 +7,8 @@ from datetime import date
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from backend.models import Category, Transaction
-from backend.utils import rupees
+from backend.models import INFLOW_TYPES, OUTFLOW_TYPES, Account, Category, Transaction
+from backend.utils import rupees, today_ist
 
 
 def _month_bounds(month: str) -> tuple[str, str]:
@@ -80,6 +80,54 @@ def days(db: Session, month: str) -> list[dict]:
         }
         for day, sums in sorted(by_day.items())
     ]
+
+
+def networth(db: Session, months: int = 12) -> dict:
+    """End-of-month total balance across non-archived accounts.
+
+    Cash position only: lend/borrow flows move the number (money left the
+    accounts) — receivables from people are deliberately not counted. The
+    current month's point is the balance to date. Anchored to IST.
+    """
+    active_ids = list(db.scalars(select(Account.id).where(Account.is_archived.is_(False))))
+    opening = db.scalar(
+        select(func.coalesce(func.sum(Account.opening_balance_minor), 0))
+        .where(Account.id.in_(active_ids))
+    )
+
+    month_col = func.substr(Transaction.date, 1, 7)
+    flows: dict[str, int] = {}
+
+    def add(rows, sign):
+        for month, total in rows:
+            flows[month] = flows.get(month, 0) + sign * total
+
+    add(db.execute(
+        select(month_col, func.sum(Transaction.inr_minor))
+        .where(Transaction.type.in_(INFLOW_TYPES), Transaction.account_id.in_(active_ids))
+        .group_by(month_col)
+    ).all(), +1)
+    add(db.execute(
+        select(month_col, func.sum(Transaction.inr_minor))
+        .where(Transaction.type.in_((*OUTFLOW_TYPES, "transfer")),
+               Transaction.account_id.in_(active_ids))
+        .group_by(month_col)
+    ).all(), -1)
+    add(db.execute(
+        select(month_col, func.sum(Transaction.inr_minor))
+        .where(Transaction.type == "transfer", Transaction.to_account_id.in_(active_ids))
+        .group_by(month_col)
+    ).all(), +1)
+
+    current = today_ist()[:7]
+    start_month = _shift_month(current, -(months - 1))
+    running = opening + sum(total for month, total in flows.items() if month < start_month)
+    items = []
+    for i in range(months):
+        month = _shift_month(start_month, i)
+        running += flows.get(month, 0)
+        items.append({"month": month, "value": rupees(running)})
+    return {"items": items}
 
 
 def categories(db: Session, date_from: str, date_to: str, kind: str = "expense") -> dict:

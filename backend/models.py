@@ -115,3 +115,43 @@ class ChatMessage(Base):
     tool_writes: Mapped[bool] = mapped_column(default=False)
     attachments: Mapped[str | None] = mapped_column(default=None)  # JSON list of filenames
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Budget(Base):
+    """Monthly spending limit per parent expense category (same limit every month)."""
+
+    __tablename__ = "budgets"
+    __table_args__ = (CheckConstraint("amount_minor > 0"),)
+
+    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"), primary_key=True)
+    amount_minor: Mapped[int]
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+
+class RecurringRule(Base):
+    """Suggest-and-confirm recurring transactions. No background jobs: due items
+    are computed on request from next_due; confirming creates the transaction
+    and advances next_due one period."""
+
+    __tablename__ = "recurring_rules"
+    __table_args__ = (
+        CheckConstraint("amount_minor > 0"),
+        CheckConstraint("type IN ('income', 'expense', 'transfer')"),
+        CheckConstraint("day_of_month BETWEEN 1 AND 31"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    description: Mapped[str]
+    type: Mapped[str]
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    to_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), default=None)
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), default=None)
+    amount_minor: Mapped[int]
+    day_of_month: Mapped[int]
+    next_due: Mapped[str]  # ISO YYYY-MM-DD
+    is_paused: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    account: Mapped[Account] = relationship(foreign_keys=[account_id])
+    to_account: Mapped[Account | None] = relationship(foreign_keys=[to_account_id])
+    category: Mapped[Category | None] = relationship()

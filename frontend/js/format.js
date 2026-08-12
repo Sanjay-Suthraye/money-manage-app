@@ -86,3 +86,9 @@ export function splitCategoryName(name) {
   }
   return { icon: null, label: name };
 }
+
+/* "2026-09-08" -> "8 Sep" */
+export function shortDate(iso) {
+  const d = new Date(`${iso}T00:00:00`);
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}

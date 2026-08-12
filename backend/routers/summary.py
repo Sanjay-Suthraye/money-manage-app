@@ -31,6 +31,11 @@ def categories(
     return svc.categories(db, date_from, date_to, kind)
 
 
+@router.get("/networth")
+def networth(months: int = Query(default=12, ge=1, le=60), db: Session = Depends(get_db)):
+    return svc.networth(db, months)
+
+
 @router.get("/accounts")
 def accounts(db: Session = Depends(get_db)):
     return accounts_svc.list_with_balances(db)

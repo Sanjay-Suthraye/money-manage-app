@@ -97,6 +97,36 @@ class SplitIn(BaseModel):
     note: str | None = None
 
 
+class BudgetIn(BaseModel):
+    amount: Decimal = Field(ge=0)  # 0 removes the budget
+
+
+class RecurringIn(BaseModel):
+    description: str = Field(min_length=1)
+    type: Literal["income", "expense", "transfer"]
+    account_id: int
+    to_account_id: int | None = None
+    category_id: int | None = None
+    amount: Decimal = Field(gt=0)
+    day_of_month: int = Field(ge=1, le=31)
+    next_due: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class RecurringPatch(BaseModel):
+    description: str | None = Field(default=None, min_length=1)
+    type: Literal["income", "expense", "transfer"] | None = None
+    account_id: int | None = None
+    to_account_id: int | None = None
+    category_id: int | None = None
+    amount: Decimal | None = Field(default=None, gt=0)
+    day_of_month: int | None = Field(default=None, ge=1, le=31)
+    is_paused: bool | None = None
+
+
+class RecurringConfirmIn(BaseModel):
+    date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
 class LoanIn(BaseModel):
     kind: LoanKind
     person_id: int

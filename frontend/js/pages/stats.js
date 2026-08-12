@@ -1,8 +1,8 @@
 import { html, useEffect, useMemo, useRef, useState } from "../html.js";
 import { api } from "../api.js";
-import { fmt, fmtWhole, monthBounds, shiftMonth, shortMonth } from "../format.js";
+import { fmt, fmtWhole, monthBounds, shiftMonth, shortMonth, splitCategoryName } from "../format.js";
 import { setMonth } from "../store.js";
-import { EmptyState, MonthNav, Seg, Sheet, useApi, useStore } from "../components/ui.js";
+import { AmountInput, Chips, EmptyState, MonthNav, Seg, Sheet, toast, useApi, useStore } from "../components/ui.js";
 import { applyChartDefaults, cssVar, inrTick, onThemeChange, seriesColor } from "../chartTheme.js";
 import { TxEditor, TxRow } from "./transactions.js";
 import { ManageCategoriesSheet } from "./categories.js";
@@ -239,6 +239,145 @@ function TrendLine({ month, thisDays, lastDays }) {
   `;
 }
 
+/* ---- Net worth: end-of-month balance across all active accounts ---- */
+function NetWorthLine() {
+  const { data } = useApi(() => api.summaryNetworth(12), []);
+  const canvasRef = useChart(() => {
+    if (!data?.items?.length) return null;
+    return {
+      type: "line",
+      data: {
+        labels: data.items.map((m) => shortMonth(m.month)),
+        datasets: [
+          {
+            label: "Net worth",
+            data: data.items.map((m) => m.value),
+            borderColor: cssVar("--accent"),
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            tension: 0.2,
+          },
+        ],
+      },
+      options: {
+        scales: {
+          x: { grid: { display: false }, ticks: { maxTicksLimit: 6 } },
+          y: { ticks: { callback: inrTick }, border: { display: false } },
+        },
+        plugins: {
+          tooltip: { callbacks: { label: (ctx) => ` ${fmt(ctx.parsed.y)}` } },
+        },
+      },
+    };
+  }, [data]);
+
+  if (data && !data.items?.length) return null;
+  return html`
+    <div class="card">
+      <div class="spread" style="margin-bottom:8px">
+        <div style="font-weight:650; font-size:14.5px">Net worth</div>
+        <div class="muted" style="font-size:12px">money lent to people not included</div>
+      </div>
+      <canvas ref=${canvasRef} height="170"></canvas>
+    </div>
+  `;
+}
+
+/* ---- Budgets: monthly limit vs spend per parent expense category ---- */
+function BudgetSheet({ month, budgets, onClose, onChanged }) {
+  const { categories } = useStore();
+  const parents = categories.filter((c) => c.kind === "expense");
+  const [categoryId, setCategoryId] = useState(null);
+  const [amount, setAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  function pick(id) {
+    setCategoryId(id);
+    const existing = budgets?.items?.find((i) => i.category_id === id);
+    setAmount(existing ? String(existing.limit) : "");
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api.setBudget(categoryId, Number(amount) || 0);
+      toast(Number(amount) > 0 ? "Budget saved" : "Budget removed");
+      onChanged();
+      setCategoryId(null);
+      setAmount("");
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return html`
+    <${Sheet} onClose=${onClose}>
+      <h2>Budgets · ${month}</h2>
+      <div class="field">
+        <label>Category</label>
+        <${Chips} items=${parents} value=${categoryId} onChange=${pick} allowNone />
+      </div>
+      ${categoryId &&
+      html`
+        <div class="field">
+          <label>Monthly limit (0 removes)</label>
+          <${AmountInput} value=${amount} onChange=${setAmount} currency="INR" autofocus />
+        </div>
+        <button class="btn" disabled=${saving || amount === ""} onClick=${save}>Save budget</button>
+      `}
+    <//>
+  `;
+}
+
+function budgetFill(pct) {
+  if (pct >= 1) return "var(--expense)";
+  if (pct >= 0.8) return "var(--series-4)";
+  return "var(--good-text)";
+}
+
+function BudgetsCard({ month }) {
+  const [refresh, setRefresh] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const { data } = useApi(() => api.budgets(month), [month, refresh]);
+
+  const items = data?.items || [];
+  return html`
+    <div class="card">
+      <div class="spread" style="margin-bottom:4px">
+        <div style="font-weight:650; font-size:14.5px">Budgets</div>
+        <button class="chip" onClick=${() => setEditing(true)}>${items.length ? "Edit" : "Set a budget"}</button>
+      </div>
+      ${items.length === 0 &&
+      html`<div class="muted" style="font-size:13px; padding:6px 0 2px">
+        No budgets yet — set a monthly limit per category.
+      </div>`}
+      ${items.map((b) => {
+        const { icon, label } = splitCategoryName(b.name);
+        return html`
+          <div class="budget-row" key=${b.category_id}>
+            <div class="spread">
+              <div style="font-size:14px; font-weight:550">${icon ? `${icon} ` : ""}${label || b.name}</div>
+              <div class="tnum" style="font-size:13px">
+                ${fmt(b.spent)} <span class="muted">of ${fmt(b.limit)}</span>
+                ${b.pct >= 1 && html`<span class="neg"> · +${fmt(Math.round((b.spent - b.limit) * 100) / 100)} over</span>`}
+              </div>
+            </div>
+            <div class="budget-bar">
+              <div class="fill" style="width:${Math.min(b.pct, 1) * 100}%; background:${budgetFill(b.pct)}"></div>
+            </div>
+          </div>
+        `;
+      })}
+      ${editing &&
+      html`<${BudgetSheet} month=${month} budgets=${data}
+        onClose=${() => setEditing(false)} onChanged=${() => setRefresh((r) => r + 1)} />`}
+    </div>
+  `;
+}
+
 /* ---- Category drill-in: filtered transaction list ---- */
 function DrillSheet({ month, kind, slice, onClose }) {
   const [from, to] = monthBounds(month);
@@ -305,7 +444,9 @@ export function StatsPage() {
         ? html`<${EmptyState} icon="📊" title="Nothing to chart yet"
             sub="Add some transactions and the breakdown appears here." />`
         : html`<${CategoryDonut} data=${catData} onPick=${setDrill} />`}
+      ${kind === "expense" && html`<${BudgetsCard} month=${month} />`}
       <${MonthlyBars} months=${months} />
+      <${NetWorthLine} />
       <${TrendLine} month=${month} thisDays=${thisDays} lastDays=${lastDays} />
       ${drill &&
       html`<${DrillSheet} month=${month} kind=${kind} slice=${drill} onClose=${() => setDrill(null)} />`}

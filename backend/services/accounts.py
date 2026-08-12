@@ -1,10 +1,13 @@
+import calendar
+from datetime import date
+
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.models import INFLOW_TYPES, OUTFLOW_TYPES, Account, Transaction
 from backend.schemas import AccountIn, AccountPatch
-from backend.utils import rupees, to_minor
+from backend.utils import rupees, to_minor, today_ist
 
 
 def compute_balances(db: Session) -> dict[int, int]:
@@ -38,7 +41,61 @@ def compute_balances(db: Session) -> dict[int, int]:
     return balances
 
 
-def account_to_dict(acc: Account, balance_minor: int) -> dict:
+def _clamp_day(year: int, month: int, day: int) -> date:
+    return date(year, month, min(day, calendar.monthrange(year, month)[1]))
+
+
+def _shift(year: int, month: int, delta: int) -> tuple[int, int]:
+    index = year * 12 + (month - 1) + delta
+    return index // 12, index % 12 + 1
+
+
+def card_cycle(db: Session, acc: Account, today: date) -> dict | None:
+    """Current statement cycle for a credit card: spend since the last
+    statement date, days to the next close, and the due date."""
+    if acc.type != "credit_card" or not acc.statement_day:
+        return None
+    stmt_this = _clamp_day(today.year, today.month, acc.statement_day)
+    if today > stmt_this:
+        last_stmt = stmt_this
+        next_stmt = _clamp_day(*_shift(today.year, today.month, 1), acc.statement_day)
+    else:
+        last_stmt = _clamp_day(*_shift(today.year, today.month, -1), acc.statement_day)
+        next_stmt = stmt_this
+
+    # Charges only: outflows + transfers FROM the card. Payments are transfers
+    # INTO the card (to_account_id) and never match account_id here.
+    spend = db.scalar(
+        select(func.coalesce(func.sum(Transaction.inr_minor), 0)).where(
+            Transaction.account_id == acc.id,
+            Transaction.type.in_((*OUTFLOW_TYPES, "transfer")),
+            Transaction.date > last_stmt.isoformat(),
+            Transaction.date <= today.isoformat(),
+        )
+    )
+
+    due_date = None
+    if acc.due_day:
+        # Due day after the statement day means the due falls in the statement
+        # month itself doesn't make sense — pay period follows the close:
+        # stmt 20 / due 8  -> due the month AFTER the close
+        # stmt 1  / due 20 -> due the same month as the close
+        if acc.due_day > acc.statement_day:
+            due_date = _clamp_day(next_stmt.year, next_stmt.month, acc.due_day)
+        else:
+            due_date = _clamp_day(*_shift(next_stmt.year, next_stmt.month, 1), acc.due_day)
+
+    return {
+        "spend": rupees(spend),
+        "start": last_stmt.isoformat(),
+        "statement_date": next_stmt.isoformat(),
+        "statement_in_days": (next_stmt - today).days,
+        "due_date": due_date.isoformat() if due_date else None,
+        "due_in_days": (due_date - today).days if due_date else None,
+    }
+
+
+def account_to_dict(acc: Account, balance_minor: int, cycle: dict | None = None) -> dict:
     return {
         "id": acc.id,
         "name": acc.name,
@@ -50,14 +107,16 @@ def account_to_dict(acc: Account, balance_minor: int) -> dict:
         "due_day": acc.due_day,
         "credit_limit": rupees(acc.credit_limit_minor) if acc.credit_limit_minor else None,
         "is_archived": acc.is_archived,
+        "cycle": cycle,
     }
 
 
 def list_with_balances(db: Session, include_archived: bool = False) -> list[dict]:
     balances = compute_balances(db)
     accounts = db.scalars(select(Account).order_by(Account.type, Account.name)).all()
+    today = date.fromisoformat(today_ist())
     return [
-        account_to_dict(acc, balances.get(acc.id, 0))
+        account_to_dict(acc, balances.get(acc.id, 0), card_cycle(db, acc, today))
         for acc in accounts
         if include_archived or not acc.is_archived
     ]

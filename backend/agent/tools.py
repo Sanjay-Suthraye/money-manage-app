@@ -247,13 +247,19 @@ async def query_transactions(args: dict[str, Any]) -> dict:
     "get_summary",
     "Aggregated numbers. mode='monthly' (income/expense per month, param months), "
     "mode='categories' (per-category totals, params from/to/kind), "
-    "mode='accounts' (balances + credit-card outstanding), "
-    "mode='persons' (who owes whom).",
+    "mode='accounts' (balances + credit-card outstanding + statement-cycle info), "
+    "mode='persons' (who owes whom), "
+    "mode='budgets' (monthly category limits vs spend, param month YYYY-MM), "
+    "mode='networth' (end-of-month total balance series, param months), "
+    "mode='recurring' (recurring rules and currently-due suggestions).",
     {
         "type": "object",
         "properties": {
-            "mode": {"type": "string", "enum": ["monthly", "categories", "accounts", "persons"]},
+            "mode": {"type": "string",
+                     "enum": ["monthly", "categories", "accounts", "persons",
+                              "budgets", "networth", "recurring"]},
             "months": {"type": "integer"},
+            "month": {"type": "string"},
             "from": {"type": "string"},
             "to": {"type": "string"},
             "kind": {"type": "string", "enum": ["income", "expense"]},
@@ -262,6 +268,8 @@ async def query_transactions(args: dict[str, Any]) -> dict:
     },
 )
 async def get_summary(args: dict[str, Any]) -> dict:
+    from backend.services import budgets as budgets_svc
+    from backend.services import recurring as recurring_svc
     from backend.utils import today_ist
 
     db = SessionLocal()
@@ -278,6 +286,12 @@ async def get_summary(args: dict[str, Any]) -> dict:
             return _ok(accounts_svc.list_with_balances(db))
         if mode == "persons":
             return _ok(loans_svc.person_balances(db))
+        if mode == "budgets":
+            return _ok(budgets_svc.list_budgets(db, args.get("month") or today_ist()[:7]))
+        if mode == "networth":
+            return _ok(summary_svc.networth(db, args.get("months") or 12))
+        if mode == "recurring":
+            return _ok({"rules": recurring_svc.list_rules(db), "due": recurring_svc.due_items(db)})
         return _err(f"unknown mode {mode}")
     except Exception as exc:
         return _err(str(exc))

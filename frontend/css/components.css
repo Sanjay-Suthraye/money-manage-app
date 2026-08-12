@@ -274,6 +274,23 @@
   margin-left: 6px; vertical-align: 1px;
 }
 
+/* ---- Recurring ---- */
+.recur-banner {
+  display: flex; justify-content: space-between; align-items: center;
+  width: calc(100% - 32px); margin: 0 16px 10px; padding: 12px 14px;
+  font-weight: 600; font-size: 14px; color: var(--accent);
+}
+.recur-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--grid); }
+.recur-row:last-child { border-bottom: none; }
+.recur-row .grow { flex: 1; }
+.recur-row .sub { font-size: 12.5px; color: var(--muted); }
+
+/* ---- Budgets ---- */
+.budget-row { padding: 9px 0; border-bottom: 1px solid var(--grid); }
+.budget-row:last-child { border-bottom: none; padding-bottom: 2px; }
+.budget-bar { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin-top: 7px; }
+.budget-bar .fill { height: 100%; border-radius: 999px; }
+
 /* ---- Category management ---- */
 .gearbtn {
   width: 36px; height: 36px; border-radius: 50%;

@@ -1,6 +1,6 @@
 import { html, useState } from "../html.js";
 import { api } from "../api.js";
-import { fmt, todayISO } from "../format.js";
+import { fmt, shortDate, todayISO } from "../format.js";
 import { invalidate } from "../store.js";
 import { AmountInput, Chips, Sheet, toast, useApi, useStore } from "../components/ui.js";
 import { TxEditor, TxRow } from "./transactions.js";
@@ -176,6 +176,10 @@ function AccountDetail({ account, onClose }) {
           <div class="amt tnum" style="font-weight:700; font-size:18px">${fmt(account.balance)}</div>
         </div>
       </div>
+      ${account.cycle &&
+      html`<div class="muted" style="font-size:13px; margin-bottom:6px">
+        This cycle ${fmt(account.cycle.spend)} · statement ${shortDate(account.cycle.statement_date)}${account.cycle.due_date ? ` · due ${shortDate(account.cycle.due_date)}` : ""}
+      </div>`}
       <div class="muted" style="font-size:13px; margin-bottom:10px">Recent transactions</div>
       ${(txs || []).map((tx) => html`<${TxRow} key=${tx.id} tx=${tx} onClick=${() => setEditTx(tx)} />`)}
       ${txs?.length === 0 && html`<div class="muted" style="padding:16px 0">No transactions yet.</div>`}
@@ -270,6 +274,8 @@ export function AccountsPage() {
                       <div class="name">${acc.name}</div>
                       ${acc.type === "credit_card" && acc.outstanding > 0 &&
                       html`<div class="sub neg">Outstanding ${fmt(acc.outstanding)}</div>`}
+                      ${acc.cycle &&
+                      html`<div class="sub">cycle ${fmt(acc.cycle.spend)} · closes in ${acc.cycle.statement_in_days}d${acc.cycle.due_date ? ` · due ${shortDate(acc.cycle.due_date)}` : ""}</div>`}
                     </div>
                     <div class="bal tnum ${acc.balance < 0 ? "neg" : ""}">${fmt(acc.balance)}</div>
                   </button>

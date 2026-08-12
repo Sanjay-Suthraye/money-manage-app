@@ -6,6 +6,7 @@ import {
   AmountInput, Chips, EmptyState, MonthNav, Seg, Sheet,
   slotColor, toast, useApi, useStore,
 } from "../components/ui.js";
+import { RecurringBanner, RecurringSheet } from "./recurring.js";
 
 const TYPE_META = {
   income: { sign: "+", cls: "pos" },
@@ -76,6 +77,7 @@ export function TxSheet({ tx, onClose, onSaved }) {
   const [split, setSplit] = useState(false);
   const [splitPersonId, setSplitPersonId] = useState(null);
   const [friendAmount, setFriendAmount] = useState("");
+  const [makeRecurring, setMakeRecurring] = useState(false);
 
   const canSplit = type === "expense" && !isEdit && currency === "INR";
   const splitOn = canSplit && split;
@@ -131,8 +133,27 @@ export function TxSheet({ tx, onClose, onSaved }) {
       };
       if (isEdit) await api.updateTransaction(tx.id, payload);
       else await api.createTransaction(payload);
+      if (makeRecurring && !isEdit) {
+        // Best-effort: the transaction is already saved; a rule failure only toasts.
+        const cat = categories.flatMap((c) => [c, ...c.children]).find((c) => c.id === categoryId);
+        try {
+          await api.createRecurring({
+            description: note.trim() || cat?.name || type,
+            type,
+            account_id: accountId,
+            to_account_id: type === "transfer" ? toAccountId : null,
+            category_id: type !== "transfer" ? categoryId : null,
+            amount: Number(amount),
+            day_of_month: Number(date.slice(8, 10)),
+          });
+          toast("Saved + recurring rule created");
+        } catch (err) {
+          toast(`Saved, but rule failed: ${err.message}`);
+        }
+      } else {
+        toast(isEdit ? "Transaction updated" : "Transaction added");
+      }
       invalidate();
-      toast(isEdit ? "Transaction updated" : "Transaction added");
       onSaved();
     } catch (err) {
       toast(err.message);
@@ -255,6 +276,14 @@ export function TxSheet({ tx, onClose, onSaved }) {
         <label>Note</label>
         <input type="text" value=${note} placeholder="Optional" onInput=${(e) => setNote(e.target.value)} />
       </div>
+      ${!isEdit && !splitOn &&
+      html`
+        <div class="field">
+          <button class="chip ${makeRecurring ? "sel" : ""}" onClick=${() => setMakeRecurring(!makeRecurring)}>
+            ↻ Repeat monthly on day ${Number(date.slice(8, 10))}
+          </button>
+        </div>
+      `}
       <div class="btn-row">
         ${isEdit && html`<button class="btn danger" disabled=${saving} onClick=${remove}>Delete</button>`}
         <button class="btn" disabled=${!valid || saving} onClick=${save}>
@@ -378,7 +407,10 @@ export function TransactionsPage() {
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState({ type: null, account_id: null, person_id: null });
   const [filterOpen, setFilterOpen] = useState(false);
+  const [recurringOpen, setRecurringOpen] = useState(false);
   const [from, to] = monthBounds(month);
+
+  const { data: due } = useApi(() => api.recurringDue(), [refresh]);
 
   useEffect(() => {
     const t = setTimeout(() => setQ(query.trim()), 300);
@@ -427,6 +459,7 @@ export function TransactionsPage() {
       html`
         <div class="topbar">
           <${MonthNav} month=${month} onChange=${setMonth} />
+          <button class="gearbtn" onClick=${() => setRecurringOpen(true)} aria-label="Recurring transactions">↻</button>
         </div>
       `}
       <div class="searchrow">
@@ -463,6 +496,7 @@ export function TransactionsPage() {
               <div><div class="lab">Net</div><div class="val tnum">${fmt(totals.net)}</div></div>
             </div>
           `}
+      ${!active && html`<${RecurringBanner} count=${due?.count || 0} onOpen=${() => setRecurringOpen(true)} />`}
       ${error && html`<div class="card neg">${error}</div>`}
       ${!loading && txs?.length === 0 &&
       html`<${EmptyState} icon=${active ? "🔍" : "🧾"} title=${active ? "No matches" : "No transactions this month"}
@@ -500,6 +534,7 @@ export function TransactionsPage() {
             onClose=${() => setSheet(null)}
             onSaved=${() => { setSheet(null); setRefresh((r) => r + 1); }} />`)}
       ${filterOpen && html`<${FilterSheet} filters=${filters} onChange=${setFilters} onClose=${() => setFilterOpen(false)} />`}
+      ${recurringOpen && html`<${RecurringSheet} onClose=${() => setRecurringOpen(false)} onChanged=${() => setRefresh((r) => r + 1)} />`}
     </div>
   `;
 }
