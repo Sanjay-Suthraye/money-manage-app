@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from uuid import uuid4
@@ -106,6 +107,24 @@ def _compose_prompt(body: ChatIn) -> str:
             f"inspect_file tool before responding:\n{lines}]")
 
 
+async def _abort_orphaned_turn(client) -> None:
+    """After a client disconnect mid-turn: interrupt the CLI and drain its
+    leftover messages so the next chat starts clean. Reset if that fails."""
+    async with agent_session.lock:
+        if agent_session.peek() is not client:
+            return  # already reset/reconnected
+
+        async def _drain():
+            await client.interrupt()
+            async for _ in client.receive_response():
+                pass
+
+        try:
+            await asyncio.wait_for(_drain(), timeout=30)
+        except Exception:
+            await agent_session.reset()
+
+
 @router.post("")
 async def chat(body: ChatIn):
     async def gen():
@@ -119,6 +138,7 @@ async def chat(body: ChatIn):
                           attachments=[a.filename for a in body.attachments])
             chunks: list[str] = []
             agent_saved = False
+            turn_done = False
             try:
                 await client.query(_compose_prompt(body))
                 async for msg in client.receive_response():
@@ -147,10 +167,18 @@ async def chat(body: ChatIn):
                         if chunks:
                             _save_message("agent", "".join(chunks))
                         agent_saved = True
+                        turn_done = True
                         yield {"event": "done", "data": json.dumps({
                             "ok": not msg.is_error,
                             "cost_usd": msg.total_cost_usd,
                         })}
+            except GeneratorExit:
+                # Client vanished mid-turn (tab closed / hard abort). The CLI keeps
+                # generating and its messages would poison the NEXT turn's stream —
+                # interrupt and drain in the background, then re-raise.
+                if not turn_done:
+                    asyncio.get_running_loop().create_task(_abort_orphaned_turn(client))
+                raise
             except Exception as exc:
                 # The SDK session may be wedged; drop it so the next message reconnects.
                 await agent_session.reset()
@@ -162,6 +190,21 @@ async def chat(body: ChatIn):
                     _save_message("agent", "".join(chunks))
 
     return EventSourceResponse(gen())
+
+
+@router.post("/stop")
+async def stop():
+    """Interrupt the in-flight agent turn. Deliberately does NOT take the
+    session lock — the streaming request holds it; the interrupt is delivered
+    through the SDK's control channel and the stream then finishes normally."""
+    client = agent_session.peek()
+    if client is None:
+        return {"ok": False, "detail": "no active session"}
+    try:
+        await client.interrupt()
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "detail": str(exc)}
 
 
 @router.get("/history")

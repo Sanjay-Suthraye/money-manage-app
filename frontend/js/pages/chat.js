@@ -1,7 +1,21 @@
-import { html, useEffect, useRef, useState } from "../html.js";
+import { html, useEffect, useMemo, useRef, useState } from "../html.js";
 import { api, streamChat } from "../api.js";
 import { invalidate } from "../store.js";
 import { toast } from "../components/ui.js";
+import { renderMarkdown } from "../markdown.js";
+
+/* Agent replies render as (safe, escaped-first) markdown; re-parsed per delta. */
+function AgentBubble({ text, streaming, stopped }) {
+  const htmlStr = useMemo(() => renderMarkdown(text), [text]);
+  return html`
+    <div class="bubble agent">
+      ${text
+        ? html`<div class="md" dangerouslySetInnerHTML=${{ __html: htmlStr }}></div>`
+        : streaming ? "…" : ""}
+      ${stopped && html`<div class="stopped-note">stopped</div>`}
+    </div>
+  `;
+}
 
 const SUGGESTIONS = [
   "How much did I spend on food this month?",
@@ -13,6 +27,13 @@ const SUGGESTIONS = [
 let savedMessages = []; // survives tab switches within the session
 let historyLoaded = false; // server history fetched once per page load
 
+/* Small preview of a staged image attachment; URL revoked on unmount. */
+function PendingThumb({ file }) {
+  const url = useMemo(() => URL.createObjectURL(file), [file]);
+  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  return html`<img class="attach-thumb" src=${url} alt=${file.name} />`;
+}
+
 export function ChatPage() {
   const [messages, setMessages] = useState(savedMessages);
   const [input, setInput] = useState("");
@@ -23,6 +44,8 @@ export function ChatPage() {
   const stickToBottom = useRef(true);
   const abortRef = useRef(null);
   const fileInputRef = useRef(null);
+  const stoppingRef = useRef(false);
+  const stopTimerRef = useRef(null);
 
   useEffect(() => {
     savedMessages = messages;
@@ -52,6 +75,7 @@ export function ChatPage() {
     if ((!message && !file) || busy) return;
 
     let attachments = [];
+    let thumb = null;
     if (file) {
       setUploading(true);
       try {
@@ -64,14 +88,16 @@ export function ChatPage() {
       }
       setUploading(false);
       setPendingFile(null);
+      if (file.type?.startsWith("image/")) thumb = URL.createObjectURL(file);
     }
 
     setInput("");
     setBusy(true);
+    stoppingRef.current = false;
     stickToBottom.current = true;
     setMessages((m) => [
       ...m,
-      { role: "user", text: message || "(attached file)", attachments: attachments.map((a) => a.filename) },
+      { role: "user", text: message || "(attached file)", attachments: attachments.map((a) => a.filename), thumb },
       { role: "agent", text: "" },
     ]);
 
@@ -103,7 +129,18 @@ export function ChatPage() {
         onDone: (payload) => {
           setBusy(false);
           abortRef.current = null;
-          if (payload?.ok === false) {
+          clearTimeout(stopTimerRef.current);
+          if (stoppingRef.current) {
+            stoppingRef.current = false;
+            setMessages((m) => {
+              const copy = [...m];
+              const last = copy[copy.length - 1];
+              if (last?.role === "agent") {
+                copy[copy.length - 1] = { ...last, text: last.text || "—", stopped: true };
+              }
+              return copy;
+            });
+          } else if (payload?.ok === false) {
             setMessages((m) => {
               const copy = [...m];
               const last = copy[copy.length - 1];
@@ -121,9 +158,18 @@ export function ChatPage() {
         onError: (msg) => {
           setBusy(false);
           abortRef.current = null;
+          clearTimeout(stopTimerRef.current);
+          const stopped = stoppingRef.current;
+          stoppingRef.current = false;
           setMessages((m) => {
             const copy = [...m];
             const last = copy[copy.length - 1];
+            if (stopped) {
+              if (last?.role === "agent") {
+                copy[copy.length - 1] = { ...last, text: last.text || "—", stopped: true };
+              }
+              return copy;
+            }
             const errBubble = { role: "error", text: msg };
             if (last?.role === "agent" && !last.text) copy[copy.length - 1] = errBubble;
             else copy.push(errBubble); // keep the partial reply, error after it
@@ -135,11 +181,34 @@ export function ChatPage() {
     );
   }
 
+  async function stop() {
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
+    try {
+      const r = await api.chatStop();
+      if (!r.ok) throw new Error(r.detail || "stop failed");
+      // The interrupted turn still ends with a normal `done` frame; if it
+      // never arrives, hard-abort as a fallback.
+      stopTimerRef.current = setTimeout(() => abortRef.current?.abort(), 4000);
+    } catch {
+      abortRef.current?.abort();
+      setBusy(false);
+      stoppingRef.current = false;
+      setMessages((m) => {
+        const copy = [...m];
+        const last = copy[copy.length - 1];
+        if (last?.role === "agent") copy[copy.length - 1] = { ...last, text: last.text || "—", stopped: true };
+        return copy;
+      });
+    }
+  }
+
   async function reset() {
     abortRef.current?.abort();
     try {
       await api.chatReset();
     } catch { /* backend may be down; clear locally anyway */ }
+    for (const m of savedMessages) if (m.thumb) URL.revokeObjectURL(m.thumb);
     savedMessages = [];
     setMessages([]);
     setBusy(false);
@@ -168,14 +237,18 @@ export function ChatPage() {
               </div>
             </div>
           `}
-          ${messages.map(
-            (m, i) => html`
-              <div key=${i} class="bubble ${m.role}">
-                ${m.attachments?.length > 0 &&
-                html`<div class="attach-note">📎 ${m.attachments.join(", ")}</div>`}
-                ${m.text || (busy && i === messages.length - 1 ? "…" : "")}
-              </div>
-            `
+          ${messages.map((m, i) =>
+            m.role === "agent"
+              ? html`<${AgentBubble} key=${i} text=${m.text}
+                  streaming=${busy && i === messages.length - 1} stopped=${m.stopped} />`
+              : html`
+                  <div key=${i} class="bubble ${m.role}">
+                    ${m.thumb && html`<img class="attach-thumb" src=${m.thumb} alt=${m.attachments?.[0] || "attachment"} />`}
+                    ${m.attachments?.length > 0 &&
+                    html`<div class="attach-note">📎 ${m.attachments.join(", ")}</div>`}
+                    ${m.text}
+                  </div>
+                `
           )}
         </div>
       </div>
@@ -183,6 +256,8 @@ export function ChatPage() {
         ${pendingFile &&
         html`
           <div class="inner" style="padding-bottom:6px">
+            ${pendingFile.type?.startsWith("image/") &&
+            html`<${PendingThumb} file=${pendingFile} />`}
             <span class="chip sel" style="display:inline-flex; align-items:center; gap:6px">
               📎 ${pendingFile.name}
               <button style="color:inherit; font-weight:700" onClick=${() => setPendingFile(null)}>×</button>
@@ -220,7 +295,9 @@ export function ChatPage() {
               }
             }}
           ></textarea>
-          <button class="send" disabled=${busy} onClick=${() => send()} aria-label="Send">➤</button>
+          ${busy
+            ? html`<button class="send stop" onClick=${stop} aria-label="Stop">■</button>`
+            : html`<button class="send" onClick=${() => send()} aria-label="Send">➤</button>`}
         </div>
       </div>
     </div>

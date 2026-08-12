@@ -23,23 +23,32 @@ export function useApi(fetcher, deps = []) {
   return state;
 }
 
-/* ---- toast singleton ---- */
+/* ---- toast singleton (optionally with an action button, e.g. Undo) ---- */
 let toastSetter = null;
-export function toast(msg) {
-  toastSetter?.(msg);
+export function toast(msg, opts = {}) {
+  toastSetter?.({ msg, ...opts });
 }
 export function ToastHost() {
-  const [msg, setMsg] = useState(null);
+  const [t, setT] = useState(null);
   useEffect(() => {
-    toastSetter = setMsg;
+    toastSetter = setT;
     return () => { toastSetter = null; };
   }, []);
   useEffect(() => {
-    if (!msg) return;
-    const t = setTimeout(() => setMsg(null), 2600);
-    return () => clearTimeout(t);
-  }, [msg]);
-  return msg ? html`<div class="toast">${msg}</div>` : null;
+    if (!t) return;
+    const timer = setTimeout(() => setT(null), t.duration ?? 2600);
+    return () => clearTimeout(timer);
+  }, [t]);
+  if (!t) return null;
+  return html`
+    <div class="toast">
+      ${t.msg}
+      ${t.actionLabel &&
+      html`<button class="toast-action" onClick=${() => { t.onAction?.(); setT(null); }}>
+        ${t.actionLabel}
+      </button>`}
+    </div>
+  `;
 }
 
 /* ---- bottom sheet ---- */

@@ -29,6 +29,10 @@ class AgentSession:
             self._client = await self._connect()
         return self._client
 
+    def peek(self) -> ClaudeSDKClient | None:
+        """Current client without connecting (for interrupt/stop)."""
+        return self._client
+
     async def _connect(self) -> ClaudeSDKClient:
         cred = settings.agent_credential()
         env = {}

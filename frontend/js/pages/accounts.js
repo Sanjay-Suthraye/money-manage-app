@@ -1,9 +1,10 @@
-import { html, useState } from "../html.js";
+import { html, useEffect, useState } from "../html.js";
 import { api } from "../api.js";
 import { fmt, shortDate, todayISO } from "../format.js";
 import { invalidate } from "../store.js";
 import { AmountInput, Chips, Sheet, toast, useApi, useStore } from "../components/ui.js";
 import { TxEditor, TxRow } from "./transactions.js";
+import { isHidden, subscribePending } from "../pendingDelete.js";
 
 const GROUPS = [
   { type: "cash", label: "Cash" },
@@ -163,10 +164,13 @@ function AccountDetail({ account, onClose }) {
   const [editTx, setEditTx] = useState(null);
   const [editing, setEditing] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  const { data: txs } = useApi(
+  const [, setTick] = useState(0);
+  useEffect(() => subscribePending(() => setTick((t) => t + 1)), []);
+  const { data } = useApi(
     () => api.transactions({ account_id: account.id, limit: 100 }),
     [account.id, refresh]
   );
+  const txs = data?.filter((tx) => !isHidden(tx.id));
   return html`
     <${Sheet} onClose=${onClose}>
       <div class="spread" style="margin-bottom:4px">
@@ -307,6 +311,7 @@ export function AccountsPage() {
           </div>
         `}
       `}
+      <a class="card export-row" href="/api/export.xlsx">⬇ Download Excel export</a>
       <button class="fab" onClick=${() => setAdding(true)} aria-label="Add account">+</button>
       ${payCard && html`<${PayCardSheet} card=${payCard} onClose=${() => setPayCard(null)}
         onSaved=${() => { setPayCard(null); setRefresh((r) => r + 1); }} />`}

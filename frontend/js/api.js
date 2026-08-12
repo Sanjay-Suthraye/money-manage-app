@@ -84,6 +84,7 @@ export const api = {
 
   chatReset: () => request("/chat/reset", { method: "POST" }),
   chatHistory: () => request("/chat/history"),
+  chatStop: () => request("/chat/stop", { method: "POST", body: {} }),
 
   uploadChatFile: async (file) => {
     const form = new FormData();

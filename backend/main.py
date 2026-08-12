@@ -8,7 +8,7 @@ from backend import settings
 from backend.db import engine
 from backend.models import Base
 from backend.routers import (
-    accounts, auth, budgets, chat, importer, persons, recurring, summary, transactions,
+    accounts, auth, budgets, chat, export, importer, persons, recurring, summary, transactions,
 )
 from backend.settings import FRONTEND_DIR
 
@@ -55,6 +55,7 @@ app.include_router(persons.router)
 app.include_router(summary.router)
 app.include_router(budgets.router)
 app.include_router(recurring.router)
+app.include_router(export.router)
 app.include_router(importer.router)
 app.include_router(chat.router)
 

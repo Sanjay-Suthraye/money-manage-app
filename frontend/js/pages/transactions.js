@@ -7,6 +7,18 @@ import {
   slotColor, toast, useApi, useStore,
 } from "../components/ui.js";
 import { RecurringBanner, RecurringSheet } from "./recurring.js";
+import { isHidden, scheduleDelete, subscribePending, undoDelete } from "../pendingDelete.js";
+
+/* Shared delayed-delete flow: hide now, DELETE in 6s unless undone. */
+export function deleteWithUndo(txId, onDone) {
+  scheduleDelete(txId);
+  onDone();
+  toast("Transaction deleted", {
+    actionLabel: "Undo",
+    duration: 6000,
+    onAction: () => undoDelete(txId),
+  });
+}
 
 const TYPE_META = {
   income: { sign: "+", cls: "pos" },
@@ -162,17 +174,8 @@ export function TxSheet({ tx, onClose, onSaved }) {
     }
   }
 
-  async function remove() {
-    setSaving(true);
-    try {
-      await api.deleteTransaction(tx.id);
-      invalidate();
-      toast("Transaction deleted");
-      onSaved();
-    } catch (err) {
-      toast(err.message);
-      setSaving(false);
-    }
+  function remove() {
+    deleteWithUndo(tx.id, onSaved);
   }
 
   return html`
@@ -324,17 +327,8 @@ function LoanEditSheet({ tx, onClose, onSaved }) {
     }
   }
 
-  async function remove() {
-    setSaving(true);
-    try {
-      await api.deleteTransaction(tx.id);
-      invalidate();
-      toast("Loan entry deleted");
-      onSaved();
-    } catch (err) {
-      toast(err.message);
-      setSaving(false);
-    }
+  function remove() {
+    deleteWithUndo(tx.id, onSaved);
   }
 
   return html`
@@ -411,6 +405,8 @@ export function TransactionsPage() {
   const [from, to] = monthBounds(month);
 
   const { data: due } = useApi(() => api.recurringDue(), [refresh]);
+  const [pendingTick, setPendingTick] = useState(0);
+  useEffect(() => subscribePending(() => setPendingTick((t) => t + 1)), []);
 
   useEffect(() => {
     const t = setTimeout(() => setQ(query.trim()), 300);
@@ -434,24 +430,25 @@ export function TransactionsPage() {
     setFilters({ type: null, account_id: null, person_id: null });
   }
 
+  const visible = useMemo(() => (txs || []).filter((tx) => !isHidden(tx.id)), [txs, pendingTick]);
+
   const groups = useMemo(() => {
-    if (!txs) return [];
     const byDay = new Map();
-    for (const tx of txs) {
+    for (const tx of visible) {
       if (!byDay.has(tx.date)) byDay.set(tx.date, []);
       byDay.get(tx.date).push(tx);
     }
     return [...byDay.entries()];
-  }, [txs]);
+  }, [visible]);
 
   const totals = useMemo(() => {
     let income = 0, expense = 0;
-    for (const tx of txs || []) {
+    for (const tx of visible) {
       if (tx.type === "income") income += tx.inr_amount;
       if (tx.type === "expense") expense += tx.inr_amount;
     }
     return { income, expense, net: income - expense };
-  }, [txs]);
+  }, [visible]);
 
   return html`
     <div class="page">
@@ -485,7 +482,7 @@ export function TransactionsPage() {
       ${active
         ? html`
             <div class="resultline">
-              <span class="muted">${txs?.length ?? 0} results · all time</span>
+              <span class="muted">${visible.length} results · all time</span>
               <button class="chip" onClick=${clearAll}>Clear all</button>
             </div>
           `
@@ -498,7 +495,7 @@ export function TransactionsPage() {
           `}
       ${!active && html`<${RecurringBanner} count=${due?.count || 0} onOpen=${() => setRecurringOpen(true)} />`}
       ${error && html`<div class="card neg">${error}</div>`}
-      ${!loading && txs?.length === 0 &&
+      ${!loading && txs && visible.length === 0 &&
       html`<${EmptyState} icon=${active ? "🔍" : "🧾"} title=${active ? "No matches" : "No transactions this month"}
         sub=${active ? "Try different words or clear the filters." : "Tap + to add one, or tell the chat agent what you spent."} />`}
       ${groups.map(([date, list]) => {
