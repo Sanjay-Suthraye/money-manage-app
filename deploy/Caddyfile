@@ -17,6 +17,10 @@
 
 {
 	email yashnimavat0@gmail.com
+	# Clients never send SNI for IP URLs, and behind Lightsail NAT the
+	# instance's local address is the PRIVATE ip — so without this, Caddy
+	# can't pick the cert ("no certificate available for '172.26.x.x'").
+	default_sni <STATIC_IP>
 }
 
 https://<STATIC_IP> {
