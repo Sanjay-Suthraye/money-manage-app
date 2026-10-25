@@ -17,6 +17,9 @@ knows your full spending history.
   the agent inspects it, summarizes what's inside, imports on your go-ahead, and
   can undo the batch conversationally. Attach a receipt photo and it reads the
   merchant/total/date (even the card used, if printed) and records the expense.
+  Attach a PDF (a bank or card statement, a bill) and it reads the text — scans
+  as page images, password-protected statements with the password you give it —
+  then lists the entries it would add and records them on your go-ahead.
 
 ## Run it
 

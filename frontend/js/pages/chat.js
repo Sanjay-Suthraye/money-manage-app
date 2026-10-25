@@ -309,7 +309,7 @@ export function ChatPage() {
               <div style="font-weight:600; color:var(--ink-2)">Ask about your money, or dictate entries</div>
               <div style="font-size:13.5px; margin-top:4px">
                 “I spent 500 on lunch and 2000 on groceries today” — the agent records it and asks if anything's unclear.
-                Attach 📎 your Money Manager export to import it, or a receipt photo to record it.
+                Attach 📎 your Money Manager export to import it, a receipt photo to record it, or a PDF statement or bill.
               </div>
               <div class="suggestions">
                 ${SUGGESTIONS.map((s) => html`<button class="chip" onClick=${() => send(s)}>${s}</button>`)}
@@ -348,7 +348,7 @@ export function ChatPage() {
           <input
             type="file"
             ref=${fileInputRef}
-            accept=".xlsx,.xls,.csv,image/*"
+            accept=".xlsx,.xls,.csv,.pdf,application/pdf,image/*"
             style="display:none"
             onChange=${(e) => {
               if (e.target.files[0]) setPendingFile(e.target.files[0]);

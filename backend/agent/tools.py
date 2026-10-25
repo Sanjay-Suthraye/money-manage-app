@@ -3,9 +3,11 @@ layer the REST API uses — one write path, one set of validations. Tools accept
 account/category/person NAMES (natural for the model) and resolve them here.
 Amounts are rupees; services convert to paise."""
 
+import asyncio
 import base64
 import json
 import mimetypes
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -410,12 +412,102 @@ def _safe_upload_path(path_str: str, user_id: int) -> Path:
     return path
 
 
+# PDFs: statements, bills and invoices usually carry a text layer, which costs
+# the model far less than pictures of the pages. Scans have none, so their first
+# pages go as images instead — each ~1,600-3,300 tokens, re-sent on every round
+# trip of the turn, hence the small page cap.
+PDF_MAX_TEXT_PAGES = 30
+PDF_MAX_TEXT_CHARS = 30_000
+PDF_MAX_IMAGE_PAGES = 4
+PDF_MIN_CHARS_PER_PAGE = 20  # less text than this on average = a scan
+_PDF_LOCK = threading.Lock()  # PDFium is not thread-safe
+
+PDF_NEXT_STEP = (
+    "Tell the user what the document is (statement, bill, invoice, receipt), its "
+    "period and totals. To record entries from it, first check query_transactions "
+    "for those dates so nothing already entered is duplicated, then list what you "
+    "would add (date, amount, description, category, account) and ask before "
+    "calling add_transactions. Card bill payments and moves between the user's own "
+    "accounts are transfers, not expenses."
+)
+
+
+def _read_pdf(path: Path, password: str | None) -> dict:
+    """The PDF's text layer, or its first pages as images when it is a scan."""
+    from io import BytesIO
+
+    import pypdfium2 as pdfium  # lazy: a missing wheel breaks PDFs, not the app
+
+    with _PDF_LOCK:
+        try:
+            pdf = pdfium.PdfDocument(str(path), password=password or None)
+        except pdfium.PdfiumError as exc:
+            if getattr(exc, "err_code", None) != pdfium.raw.FPDF_ERR_PASSWORD:
+                raise ValueError(f"Could not open the PDF: {exc}") from exc
+            if password:
+                return _err("Wrong PDF password — ask the user to check it.")
+            return _ok({
+                "kind": "pdf",
+                "password_required": True,
+                "next_step": "The PDF is password-protected (bank statements often are). Ask "
+                             "the user for the password, then call inspect_file again with "
+                             "path and password. Never repeat the password back.",
+            })
+        try:
+            pages = len(pdf)
+            texts = []
+            for i in range(min(pages, PDF_MAX_TEXT_PAGES)):
+                page = pdf[i]
+                textpage = page.get_textpage()
+                texts.append(textpage.get_text_bounded().replace("\r\n", "\n").strip())
+                textpage.close()
+                page.close()
+            if texts and sum(map(len, texts)) >= PDF_MIN_CHARS_PER_PAGE * len(texts):
+                text = "\n\n".join(f"--- page {i + 1} ---\n{t}" for i, t in enumerate(texts))
+                return _ok({
+                    "kind": "pdf",
+                    "pages": pages,
+                    "pages_read": len(texts),
+                    "truncated": pages > len(texts) or len(text) > PDF_MAX_TEXT_CHARS,
+                    "text": text[:PDF_MAX_TEXT_CHARS],
+                    "next_step": PDF_NEXT_STEP,
+                })
+            images = []
+            for i in range(min(pages, PDF_MAX_IMAGE_PAGES)):
+                page = pdf[i]
+                scale = min(3.0, IMAGE_MAX_DIMENSION / (max(page.get_size()) or 1))
+                bitmap = page.render(scale=scale)
+                out = BytesIO()
+                bitmap.to_pil().convert("RGB").save(out, format="JPEG", quality=80)
+                bitmap.close()
+                page.close()
+                images.append({"type": "image", "mimeType": "image/jpeg",
+                               "data": base64.standard_b64encode(out.getvalue()).decode()})
+            meta = {"kind": "pdf", "scanned": True, "pages": pages,
+                    "pages_shown": len(images), "next_step": PDF_NEXT_STEP}
+            return {"content": [{"type": "text", "text": json.dumps(meta)}, *images]}
+        finally:
+            pdf.close()
+
+
 @_spec(
     "inspect_file",
     "Examine a file the user attached in chat. Spreadsheets (.xlsx/.csv) return "
     "headers, a proposed import mapping, sample parsed rows, and stats. Images "
-    "(receipts, screenshots) are returned for you to look at directly.",
-    {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    "(receipts, screenshots) are returned for you to look at directly. PDFs "
+    "(statements, bills, invoices) return their text, or page images when the "
+    "PDF is a scan; a password-protected PDF needs password.",
+    {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "password": {
+                "type": "string",
+                "description": "Only for a password-protected PDF: the password the user gave you.",
+            },
+        },
+        "required": ["path"],
+    },
 )
 async def inspect_file(user_id: int, args: dict[str, Any]) -> dict:
     try:
@@ -444,6 +536,8 @@ async def inspect_file(user_id: int, args: dict[str, Any]) -> dict:
                 raw, mime = shrunk, "image/jpeg"
             data = base64.standard_b64encode(raw).decode()
             return {"content": [{"type": "image", "data": data, "mimeType": mime}]}
+        if suffix == ".pdf":
+            return await asyncio.to_thread(_read_pdf, path, args.get("password"))
         if suffix in (".csv", ".txt"):
             return _ok({"kind": "text", "preview": path.read_text(errors="replace")[:8000]})
         return _err(f"Unsupported file type {suffix}")

@@ -23,7 +23,7 @@ DEFAULT_TITLE = "New conversation"
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-ALLOWED_SUFFIXES = {".xlsx", ".xls", ".csv", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".webp"}
+ALLOWED_SUFFIXES = {".xlsx", ".xls", ".csv", ".txt", ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 
 class Attachment(BaseModel):

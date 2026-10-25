@@ -9,3 +9,6 @@ sse-starlette
 python-dotenv
 claude-agent-sdk
 qrcode
+# Chat PDF attachments: text layer, page images for scans, password-protected
+# statements. One self-contained wheel (PDFium), no system packages.
+pypdfium2>=5.14,<6
