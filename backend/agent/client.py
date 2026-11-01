@@ -9,10 +9,11 @@ OAuth token by default (ANTHROPIC_API_KEY would win precedence and silently
 switch to pay-per-use billing)."""
 
 import asyncio
+import dataclasses
 import os
 import time
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
 from backend import settings
 from backend.agent.prompt import build_system_prompt
@@ -29,6 +30,37 @@ class BusyError(Exception):
     """Every allowed agent slot is mid-turn; try again shortly."""
 
 
+# The claude CLI accumulates modelUsage and total_cost_usd for the life of its
+# process, so in a long-lived session every ResultMessage carries the running
+# total, not the turn. Billing the raw message charged every earlier turn again
+# (three ~$0.006 turns cost 3, 6 and 9 credits). These are the counters diffed.
+_USAGE_COUNTERS = ("inputTokens", "outputTokens", "cacheReadInputTokens",
+                   "cacheCreationInputTokens", "webSearchRequests", "costUSD")
+
+
+def usage_delta(cumulative: dict | None, seen: dict | None) -> dict:
+    """One turn's per-model usage: the CLI's running total minus what the
+    session had already reported. A counter that went DOWN means the CLI
+    process restarted under us, so the running total is all this turn's."""
+    cumulative, seen = cumulative or {}, seen or {}
+    restarted = any(
+        (cumulative.get(model, {}).get(key) or 0) < (prev.get(key) or 0)
+        for model, prev in seen.items() for key in _USAGE_COUNTERS
+    )
+    if restarted:
+        seen = {}
+    turn = {}
+    for model, usage in cumulative.items():
+        prev = seen.get(model, {})
+        row = dict(usage)
+        for key in _USAGE_COUNTERS:
+            if key in usage:
+                row[key] = (usage[key] or 0) - (prev.get(key) or 0)
+        if any(row.get(key) for key in _USAGE_COUNTERS):
+            turn[model] = row
+    return turn
+
+
 class AgentSession:
     def __init__(self, user_id: int, username: str) -> None:
         self.user_id = user_id
@@ -36,6 +68,9 @@ class AgentSession:
         self._client: ClaudeSDKClient | None = None
         self.lock = asyncio.Lock()
         self.last_used = 0.0
+        # Running totals the current CLI process last reported (see usage_delta).
+        self._usage_seen: dict = {}
+        self._cost_seen = 0.0
 
     @property
     def connected(self) -> bool:
@@ -45,8 +80,26 @@ class AgentSession:
         if self._client is None:
             await registry.make_room(self.user_id)
             self._client = await self._connect()
+            self._usage_seen, self._cost_seen = {}, 0.0   # fresh process, fresh totals
         self.last_used = time.monotonic()
         return self._client
+
+    def turn_result(self, msg: ResultMessage) -> ResultMessage:
+        """`msg` with model_usage and total_cost_usd narrowed to this turn.
+
+        Call it once for every ResultMessage the session's CLI emits — billed or
+        not — so the next turn's difference starts from the right place.
+        """
+        cumulative = msg.model_usage
+        turn_usage = usage_delta(cumulative, self._usage_seen) if cumulative else cumulative
+        turn_cost = msg.total_cost_usd
+        if turn_cost is not None:
+            if turn_cost >= self._cost_seen:
+                turn_cost -= self._cost_seen
+            self._cost_seen = msg.total_cost_usd
+        if cumulative:
+            self._usage_seen = cumulative
+        return dataclasses.replace(msg, model_usage=turn_usage, total_cost_usd=turn_cost)
 
     def peek(self) -> ClaudeSDKClient | None:
         """Current client without connecting (for interrupt/stop)."""
@@ -115,8 +168,11 @@ class AgentSession:
 
             async def _drain():
                 await client.interrupt()
-                async for _ in client.receive_response():
-                    pass
+                async for msg in client.receive_response():
+                    if isinstance(msg, ResultMessage):
+                        # Refunded turn, but its usage is now in the CLI's
+                        # running total: advance past it, or the next turn pays.
+                        self.turn_result(msg)
 
             try:
                 await asyncio.wait_for(_drain(), timeout=30)

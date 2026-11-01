@@ -173,8 +173,10 @@ def _settle(user_id: int, hold_id: int | None, msg, conv_id: int,
     """Log the turn's real usage, then keep, top up, or refund the hold.
 
     A chat turn costs whatever it cost: the hold is 1 credit and the settle
-    charges the difference, derived from ResultMessage.total_cost_usd. Never
-    raises — a failure here must not mask whatever else went wrong.
+    charges the difference, priced from `msg` — which must be the session's
+    turn_result(), never the raw ResultMessage (that carries the CLI process's
+    running total). Never raises — a failure here must not mask whatever else
+    went wrong.
     """
     db = SessionLocal()
     try:
@@ -284,6 +286,8 @@ async def chat(body: ChatIn, user: User = Depends(current_user)):
                                     "writes": name in WRITE_TOOLS,
                                 })}
                     elif isinstance(msg, ResultMessage):
+                        # This turn's usage alone; the raw message is cumulative.
+                        turn = session.turn_result(msg)
                         if chunks:
                             _save_message("agent", "".join(chunks), conv_id)
                         agent_saved = True
@@ -298,18 +302,20 @@ async def chat(body: ChatIn, user: User = Depends(current_user)):
                                   else None)
                         # Settle BEFORE the done frame so its payload carries the
                         # post-settle balance.
-                        snap = _settle(user.id, hold_id, msg, conv_id, reason)
+                        snap = _settle(user.id, hold_id, turn, conv_id, reason)
                         hold_id = None
                         yield {"event": "done", "data": json.dumps({
                             "ok": not msg.is_error,
                             # Our price, matching what was actually charged.
                             # msg.total_cost_usd would report ~2x this.
-                            "cost_usd": credits_svc.result_cost_usd(msg),
+                            "cost_usd": credits_svc.result_cost_usd(turn),
                             "stopped": stopped,
                             "credits": snap,
                         })}
-            except GeneratorExit:
-                # Client vanished mid-turn (tab closed / hard abort). The CLI keeps
+            except (GeneratorExit, asyncio.CancelledError):
+                # Client vanished mid-turn (tab closed / hard abort). Behind
+                # uvicorn + sse-starlette that almost always arrives as
+                # CancelledError rather than GeneratorExit. The CLI keeps
                 # generating and its messages would poison the NEXT turn's stream —
                 # interrupt and drain in the background, then re-raise.
                 if not turn_done:
