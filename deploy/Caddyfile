@@ -1,36 +1,48 @@
-# Caddy reverse proxy for HTTPS on the bare static IP (-> /etc/caddy/Caddyfile).
-# Fill in the real static IP before installing; then: sudo systemctl reload caddy
+# Caddy reverse proxy for money.skybolabs.com (-> /etc/caddy/Caddyfile).
+# Reload after editing:  sudo systemctl reload caddy
+# Watch issuance with:   journalctl -u caddy -f
 #
-# PRIMARY: a real Let's Encrypt IP-address certificate (GA since 2026-01).
-# IP certs only come in the "shortlived" ACME profile (~6-day certs); Caddy
-# renews them automatically about every 4 days — ports 80+443 must stay open.
-# Watch issuance with: journalctl -u caddy -f
+# TRANSITION: two site blocks run side by side on purpose.
+#   * money.skybolabs.com — the real site. Normal Let's Encrypt certs (90 days,
+#     renewed at 60) because a DNS name can use the standard ACME profile.
+#   * https://13.234.241.7 — the legacy bare-IP site the three existing users
+#     have installed as a PWA. Let's Encrypt IP certs only come in the
+#     "shortlived" profile (~6-day certs, renewed every ~4 days), which is a
+#     2-day error budget: one failed renewal bricks every install within a week.
+#     That is precisely why it is being retired.
 #
-# FALLBACK (if Caddy refuses public-IP subjects against public CAs — known
-# issue caddyserver/caddy#7399): comment out the tls block below and use
-#     tls internal
-# instead, then trust Caddy's root cert on the iPhone once:
-#   scp ubuntu@<IP>:/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt .
-#   AirDrop root.crt to the phone -> Settings > General > VPN & Device
-#   Management > install profile -> Settings > General > About > Certificate
-#   Trust Settings -> enable full trust for "Caddy Local Authority".
+# DELETE the IP block once everyone has moved to the hostname — it is the single
+# riskiest thing in this file. Android App Links CANNOT verify an IP literal, so
+# the TWA depends entirely on the hostname block.
 
 {
 	email yashnimavat0@gmail.com
 	# Clients never send SNI for IP URLs, and behind Lightsail NAT the
 	# instance's local address is the PRIVATE ip — so without this, Caddy
 	# can't pick the cert ("no certificate available for '172.26.x.x'").
-	default_sni <STATIC_IP>
+	# Remove together with the IP block below.
+	default_sni 13.234.241.7
 }
 
-https://<STATIC_IP> {
+(app) {
+	# flush_interval -1: never buffer — keeps the chat SSE stream incremental.
+	# Do NOT add `encode gzip` here: compressing text/event-stream defeats the
+	# incremental flush this exists to protect.
+	reverse_proxy 127.0.0.1:8010 {
+		flush_interval -1
+	}
+}
+
+money.skybolabs.com {
+	import app
+}
+
+# --- legacy, delete after the cutover ---------------------------------------
+https://13.234.241.7 {
 	tls {
 		issuer acme {
 			profile shortlived
 		}
 	}
-	# flush_interval -1: never buffer — keeps the chat SSE stream incremental.
-	reverse_proxy 127.0.0.1:8010 {
-		flush_interval -1
-	}
+	import app
 }

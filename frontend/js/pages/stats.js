@@ -1,9 +1,10 @@
 import { html, useEffect, useMemo, useRef, useState } from "../html.js";
 import { api } from "../api.js";
-import { fmt, fmtWhole, monthBounds, shiftMonth, shortMonth, splitCategoryName } from "../format.js";
+import { fmt, fmtCompact, fmtWhole, monthBounds, monthLabel, shiftMonth, shortMonth, splitCategoryName } from "../format.js";
 import { setMonth } from "../store.js";
-import { AmountInput, Chips, EmptyState, MonthNav, Seg, Sheet, toast, useApi, useStore } from "../components/ui.js";
-import { applyChartDefaults, cssVar, inrTick, onThemeChange, seriesColor } from "../chartTheme.js";
+import { AmountInput, Chips, EmptyState, MonthNav, Seg, Sheet, slotColor, toast, useApi, useStore } from "../components/ui.js";
+import { applyChartDefaults, cssVar, inrTick, onThemeChange } from "../chartTheme.js";
+import { Icon, P } from "../icons.js";
 import { TxEditor, TxRow } from "./transactions.js";
 import { ManageCategoriesSheet } from "./categories.js";
 
@@ -28,8 +29,8 @@ function useChart(buildConfig, deps) {
   return canvasRef;
 }
 
-/* ---- Category donut: max 7 slices + Other, center total, ranked legend ---- */
-function CategoryDonut({ data, onPick }) {
+/* ---- Category donut: max 7 slices + Other, center total, legend beside it ---- */
+function CategoryDonut({ data, kind, onPick }) {
   const slices = useMemo(() => {
     if (!data?.items?.length) return [];
     const top = data.items.slice(0, MAX_SLICES);
@@ -60,51 +61,51 @@ function CategoryDonut({ data, onPick }) {
     return result;
   }, [data]);
 
-  const canvasRef = useChart(() => {
-    if (!slices.length) return null;
-    return {
-      type: "doughnut",
-      data: {
-        labels: slices.map((s) => s.name),
-        datasets: [
-          {
-            data: slices.map((s) => s.total),
-            backgroundColor: slices.map((s) => seriesColor(s.color_slot)),
-            borderColor: cssVar("--surface"),
-            borderWidth: 2, // 2px surface spacer between fills
-          },
-        ],
-      },
-      options: {
-        cutout: "68%",
-        plugins: {
-          tooltip: { callbacks: { label: (ctx) => ` ${fmt(ctx.parsed)}` } },
-        },
-      },
-    };
-  }, [slices]);
-
   if (!slices.length) return null;
 
+  // SVG ring: one stroked circle per slice, a 2.5-unit surface gap between.
+  const R = 60;
+  const C = 2 * Math.PI * R;
+  let acc = 0;
+  const arcs = slices.map((s) => {
+    const len = s.share * C;
+    const arc = {
+      ...s,
+      dash: `${slices.length > 1 ? Math.max(len - 2.5, 0) : C} ${C}`,
+      offset: -acc,
+    };
+    acc += len;
+    return arc;
+  });
+
   return html`
-    <div class="card">
-      <div class="chart-box" style="max-width:280px; margin:0 auto; position:relative">
-        <canvas ref=${canvasRef} height="240"></canvas>
-        <div style="position:absolute; inset:0; display:grid; place-items:center; pointer-events:none">
-          <div style="text-align:center">
-            <div class="muted" style="font-size:11.5px; font-weight:600">TOTAL</div>
-            <div class="tnum" style="font-size:20px; font-weight:750">${fmtWhole(data.total)}</div>
-          </div>
+    <div class="card donut-card">
+      <div class="donut">
+        <svg width="140" height="140" viewBox="0 0 140 140" role="img"
+          aria-label=${`${kind === "income" ? "Income" : "Spending"} by category: ${slices.map((s) => `${s.name} ${Math.round(s.share * 100)}%`).join(", ")}`}>
+          ${arcs.map(
+            (a) => html`
+              <circle key=${a.name} cx="70" cy="70" r=${R} fill="none" stroke-width="14"
+                style=${`stroke:${slotColor(a.color_slot)}; cursor:pointer`}
+                stroke-dasharray=${a.dash} stroke-dashoffset=${a.offset} transform="rotate(-90 70 70)"
+                onClick=${() => onPick(a)}>
+                <title>${a.name}: ${fmt(a.total)}</title>
+              </circle>
+            `
+          )}
+        </svg>
+        <div class="center">
+          <div class="lab">Total</div>
+          <div class="val tnum">${fmtWhole(data.total)}</div>
         </div>
       </div>
-      <div style="margin-top:10px">
+      <div class="legend">
         ${slices.map(
           (s) => html`
-            <button class="legend-row" key=${s.name} onClick=${() => onPick(s)}>
-              <div class="swatch" style="background:${seriesColor(s.color_slot)}"></div>
-              <div class="nm">${s.name}</div>
-              <div class="pct tnum">${Math.round(s.share * 100)}%</div>
-              <div class="val tnum">${fmt(s.total)}</div>
+            <button class="legend-row" key=${s.name} onClick=${() => onPick(s)} title=${fmt(s.total)}>
+              <span class="swatch" style=${`background:${slotColor(s.color_slot)}`}></span>
+              <span class="nm ellipsis">${s.name}</span>
+              <span class="pct tnum">${Math.round(s.share * 100)}%</span>
             </button>
           `
         )}
@@ -113,55 +114,32 @@ function CategoryDonut({ data, onPick }) {
   `;
 }
 
-/* ---- 6-month income vs expense bars (blue/red semantic pair) ---- */
-function MonthlyBars({ months }) {
-  const canvasRef = useChart(() => {
-    if (!months?.length) return null;
-    return {
-      type: "bar",
-      data: {
-        labels: months.map((m) => shortMonth(m.month)),
-        datasets: [
-          {
-            label: "Income",
-            data: months.map((m) => m.income),
-            backgroundColor: cssVar("--income"),
-            borderRadius: 4,
-            borderSkipped: false,
-            maxBarThickness: 22,
-          },
-          {
-            label: "Expense",
-            data: months.map((m) => m.expense),
-            backgroundColor: cssVar("--expense"),
-            borderRadius: 4,
-            borderSkipped: false,
-            maxBarThickness: 22,
-          },
-        ],
-      },
-      options: {
-        scales: {
-          x: { grid: { display: false } },
-          y: { ticks: { callback: inrTick }, border: { display: false } },
-        },
-        plugins: {
-          tooltip: { callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${fmt(ctx.parsed.y)}` } },
-        },
-      },
-    };
-  }, [months]);
-
+/* ---- Last 6 months: one bar per month for the selected kind; the month
+   being viewed is the accent, the rest are context gray. ---- */
+function MonthBars({ months, kind, month }) {
+  if (!months?.length) return null;
+  const vals = months.map((m) => ({ month: m.month, v: kind === "income" ? m.income : m.expense }));
+  const max = Math.max(...vals.map((x) => x.v), 1);
+  const avg = vals.reduce((sum, x) => sum + x.v, 0) / vals.length;
+  const cur = vals.some((x) => x.month === month) ? month : vals[vals.length - 1].month;
   return html`
     <div class="card">
-      <div class="spread" style="margin-bottom:8px">
-        <div style="font-weight:650; font-size:14.5px">Income vs expense</div>
-        <div class="row" style="gap:12px; font-size:12px">
-          <span class="row" style="gap:5px"><span class="swatch" style="width:10px;height:10px;border-radius:3px;background:var(--income);display:inline-block"></span>Income</span>
-          <span class="row" style="gap:5px"><span class="swatch" style="width:10px;height:10px;border-radius:3px;background:var(--expense);display:inline-block"></span>Expense</span>
-        </div>
+      <div class="spread">
+        <div class="card-title">Last 6 months</div>
+        <div class="muted tnum" style="font-size:12.5px">Avg ${fmtWhole(avg)}</div>
       </div>
-      <canvas ref=${canvasRef} height="170"></canvas>
+      <div class="mbars" role="img"
+        aria-label=${`${kind === "income" ? "Income" : "Spending"} per month: ${vals.map((x) => `${shortMonth(x.month)} ${fmtWhole(x.v)}`).join(", ")}`}>
+        ${vals.map(
+          (x) => html`
+            <div class="mbar ${x.month === cur ? "cur" : ""}" key=${x.month} title=${`${monthLabel(x.month)}: ${fmt(x.v)}`}>
+              <span class="v tnum">${x.v ? fmtCompact(x.v).replace("₹", "") : "–"}</span>
+              <div class="b" style=${`height:${Math.round((x.v / max) * 80)}px`}></div>
+              <span class="m">${shortMonth(x.month)}</span>
+            </div>
+          `
+        )}
+      </div>
     </div>
   `;
 }
@@ -199,7 +177,7 @@ function TrendLine({ month, thisDays, lastDays }) {
           {
             label: "This month",
             data: cur,
-            borderColor: cssVar("--expense"),
+            borderColor: cssVar("--accent"),
             borderWidth: 2,
             pointRadius: 0,
             pointHoverRadius: 4,
@@ -228,10 +206,10 @@ function TrendLine({ month, thisDays, lastDays }) {
   return html`
     <div class="card">
       <div class="spread" style="margin-bottom:8px">
-        <div style="font-weight:650; font-size:14.5px">Cumulative spend</div>
-        <div class="row" style="gap:12px; font-size:12px">
-          <span class="row" style="gap:5px"><span style="width:14px;height:2.5px;background:var(--expense);display:inline-block;border-radius:2px"></span>This month</span>
-          <span class="row" style="gap:5px"><span style="width:14px;height:2.5px;background:var(--baseline);display:inline-block;border-radius:2px"></span>Last month</span>
+        <div class="card-title">Cumulative spend</div>
+        <div class="chart-legend">
+          <span><i style="background:var(--accent)"></i>This month</span>
+          <span><i style="background:var(--baseline)"></i>Last month</span>
         </div>
       </div>
       <canvas ref=${canvasRef} height="170"></canvas>
@@ -276,7 +254,7 @@ function NetWorthLine() {
   return html`
     <div class="card">
       <div class="spread" style="margin-bottom:8px">
-        <div style="font-weight:650; font-size:14.5px">Net worth</div>
+        <div class="card-title">Net worth</div>
         <div class="muted" style="font-size:12px">money lent to people not included</div>
       </div>
       <canvas ref=${canvasRef} height="170"></canvas>
@@ -314,10 +292,9 @@ function BudgetSheet({ month, budgets, onClose, onChanged }) {
   }
 
   return html`
-    <${Sheet} onClose=${onClose}>
-      <h2>Budgets · ${month}</h2>
+    <${Sheet} title=${`Budgets · ${monthLabel(month)}`} onClose=${onClose}>
       <div class="field">
-        <label>Category</label>
+        <div class="field-label">Category</div>
         <${Chips} items=${parents} value=${categoryId} onChange=${pick} allowNone />
       </div>
       ${categoryId &&
@@ -332,12 +309,6 @@ function BudgetSheet({ month, budgets, onClose, onChanged }) {
   `;
 }
 
-function budgetFill(pct) {
-  if (pct >= 1) return "var(--expense)";
-  if (pct >= 0.8) return "var(--series-4)";
-  return "var(--good-text)";
-}
-
 function BudgetsCard({ month }) {
   const [refresh, setRefresh] = useState(0);
   const [editing, setEditing] = useState(false);
@@ -346,27 +317,27 @@ function BudgetsCard({ month }) {
   const items = data?.items || [];
   return html`
     <div class="card">
-      <div class="spread" style="margin-bottom:4px">
-        <div style="font-weight:650; font-size:14.5px">Budgets</div>
-        <button class="chip" onClick=${() => setEditing(true)}>${items.length ? "Edit" : "Set a budget"}</button>
+      <div class="spread" style="margin-bottom:12px">
+        <div class="card-title">Budgets</div>
+        <button class="linkbtn" onClick=${() => setEditing(true)}>${items.length ? "Edit" : "Set a budget"}</button>
       </div>
       ${items.length === 0 &&
-      html`<div class="muted" style="font-size:13px; padding:6px 0 2px">
+      html`<div class="muted" style="font-size:13px">
         No budgets yet — set a monthly limit per category.
       </div>`}
       ${items.map((b) => {
         const { icon, label } = splitCategoryName(b.name);
+        const over = b.pct > 1;
         return html`
           <div class="budget-row" key=${b.category_id}>
-            <div class="spread">
-              <div style="font-size:14px; font-weight:550">${icon ? `${icon} ` : ""}${label || b.name}</div>
-              <div class="tnum" style="font-size:13px">
-                ${fmt(b.spent)} <span class="muted">of ${fmt(b.limit)}</span>
-                ${b.pct >= 1 && html`<span class="neg"> · +${fmt(Math.round((b.spent - b.limit) * 100) / 100)} over</span>`}
-              </div>
+            <div class="top">
+              <span class="nm ellipsis">${icon ? `${icon} ` : ""}${label || b.name}</span>
+              <span class="lbl tnum ${over ? "over" : ""}">
+                ${over ? `${fmt(Math.round((b.spent - b.limit) * 100) / 100)} over` : `${fmt(b.spent)} / ${fmt(b.limit)}`}
+              </span>
             </div>
-            <div class="budget-bar">
-              <div class="fill" style="width:${Math.min(b.pct, 1) * 100}%; background:${budgetFill(b.pct)}"></div>
+            <div class="bar">
+              <div class="fill ${over ? "over" : b.pct > 0.9 ? "warn" : ""}" style=${`width:${Math.min(b.pct, 1) * 100}%`}></div>
             </div>
           </div>
         `;
@@ -395,11 +366,11 @@ function DrillSheet({ month, kind, slice, onClose }) {
 
   return html`
     <${Sheet} onClose=${onClose}>
-      <div class="spread">
-        <h2 style="margin:0">${slice.name}</h2>
-        <div class="tnum" style="font-weight:700">${fmt(slice.total)}</div>
+      <div class="sheet-head">
+        <h2 class="ellipsis">${slice.name}</h2>
+        <div class="tnum" style="font-weight:700; font-size:17px">${fmt(slice.total)}</div>
       </div>
-      <div style="margin-top:8px">
+      <div>
         ${(txs || []).map((tx) => html`<${TxRow} key=${tx.id} tx=${tx} onClick=${() => setEditTx(tx)} />`)}
       </div>
       ${editTx &&
@@ -428,14 +399,14 @@ export function StatsPage() {
     <div class="page">
       <div class="topbar">
         <${MonthNav} month=${month} onChange=${setMonth} />
-        <button class="gearbtn" onClick=${() => setManageCats(true)} aria-label="Manage categories">
-          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <button class="iconbtn" onClick=${() => setManageCats(true)} aria-label="Manage categories">
+          <${Icon} d=${P.sliders} size=${19} />
         </button>
       </div>
       <${Seg}
         options=${[
-          { value: "expense", label: "Expenses", cls: "exp" },
-          { value: "income", label: "Income", cls: "inc" },
+          { value: "expense", label: "Expenses" },
+          { value: "income", label: "Income" },
         ]}
         value=${kind}
         onChange=${setKind}
@@ -443,9 +414,9 @@ export function StatsPage() {
       ${empty
         ? html`<${EmptyState} icon="📊" title="Nothing to chart yet"
             sub="Add some transactions and the breakdown appears here." />`
-        : html`<${CategoryDonut} data=${catData} onPick=${setDrill} />`}
+        : html`<${CategoryDonut} data=${catData} kind=${kind} onPick=${setDrill} />`}
       ${kind === "expense" && html`<${BudgetsCard} month=${month} />`}
-      <${MonthlyBars} months=${months} />
+      <${MonthBars} months=${months} kind=${kind} month=${month} />
       <${NetWorthLine} />
       <${TrendLine} month=${month} thisDays=${thisDays} lastDays=${lastDays} />
       ${drill &&

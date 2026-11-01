@@ -4,7 +4,7 @@
    - /js /css /manifest /icons: network-first, cache successful responses
    Bump CACHE to purge everything. */
 
-const CACHE = "money-v1";
+const CACHE = "money-v4";
 
 self.addEventListener("install", () => self.skipWaiting());
 

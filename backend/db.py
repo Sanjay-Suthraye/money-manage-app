@@ -32,7 +32,11 @@ def get_db():
 
 
 _USER_TABLES = ("accounts", "categories", "persons", "import_batches",
-                "transactions", "budgets", "recurring_rules", "conversations")
+                "transactions", "budgets", "recurring_rules", "conversations",
+                # New tables below: the backfill loop is a no-op for them (they
+                # ship with user_id), but this list doubles as the inventory of
+                # user-owned tables, so keep it complete.
+                "parse_patterns", "credit_ledger", "ai_usage", "ad_tickets")
 
 
 def run_migrations() -> None:

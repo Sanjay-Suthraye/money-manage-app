@@ -50,6 +50,36 @@ def _err(message: str) -> dict:
     return {"content": [{"type": "text", "text": f"ERROR: {message}"}], "is_error": True}
 
 
+def _slim_tx(row: dict) -> dict:
+    """Flatten a tx_to_dict row for the model, dropping what it can't use.
+
+    tx_to_dict is shaped for the UI: nested {id, name, parent_id, color_slot}
+    objects, plus currency and inr_amount that are redundant for the INR-only
+    common case. The model only ever needs to name a transaction back to the
+    user or pass its id to update/delete, so flatten to names and omit empties.
+    Roughly halves the tokens of a query_transactions result.
+    """
+    out = {"id": row["id"], "type": row["type"], "date": row["date"],
+           "amount": row["amount"]}
+    if row.get("account"):
+        out["account"] = row["account"]["name"]
+    if row.get("to_account"):
+        out["to_account"] = row["to_account"]["name"]
+    if row.get("category"):
+        out["category"] = row["category"]["name"]
+    if row.get("person"):
+        out["person"] = row["person"]["name"]
+    if row.get("note"):
+        out["note"] = row["note"]
+    if row.get("split_group_id"):
+        out["split"] = True
+    # currency/inr_amount only matter when they differ from the INR default.
+    if row.get("currency") and row["currency"] != "INR":
+        out["currency"] = row["currency"]
+        out["inr_amount"] = row.get("inr_amount")
+    return out
+
+
 def _resolve_category(db, user_id: int, name: str | None, kind: str) -> int | None:
     if not name:
         return None
@@ -200,10 +230,10 @@ async def add_split_expense(user_id: int, args: dict[str, Any]) -> dict:
 
     db = SessionLocal()
     try:
-        acc = _resolve_account(db, args["account"])
+        acc = _resolve_account(db, user_id, args["account"])
         person = loans_svc.get_or_create_person(db, user_id, args["person"])
-        category_id = _resolve_category(db, args.get("category"), "expense")
-        created = tx_svc.create_split(db, SplitIn(
+        category_id = _resolve_category(db, user_id, args.get("category"), "expense")
+        created = tx_svc.create_split(db, user_id, SplitIn(
             date=args.get("date") or today_ist(),
             account_id=acc.id, category_id=category_id, person_id=person.id,
             my_amount=args["my_amount"], friend_amount=args["friend_amount"],
@@ -219,8 +249,10 @@ async def add_split_expense(user_id: int, args: dict[str, Any]) -> dict:
 @_spec(
     "query_transactions",
     "Search transactions. Filters: from/to dates (YYYY-MM-DD), account (name), "
-    "category (name), person (name), type, text (note search), limit. Returns "
-    "newest first with ids (needed for update/delete).",
+    "category (name), person (name), type, text (note search), limit (default "
+    "20, max 50). Returns newest first with ids (needed for update/delete). For "
+    "totals and 'how much did I spend' questions use get_summary instead — it "
+    "is far smaller than a list of rows.",
     {
         "type": "object",
         "properties": {
@@ -231,7 +263,7 @@ async def add_split_expense(user_id: int, args: dict[str, Any]) -> dict:
             "person": {"type": "string"},
             "type": {"type": "string"},
             "text": {"type": "string"},
-            "limit": {"type": "integer"},
+            "limit": {"type": "integer", "default": 20, "maximum": 50},
         },
     },
 )
@@ -253,9 +285,13 @@ async def query_transactions(user_id: int, args: dict[str, Any]) -> dict:
             account_id=account_id, category_id=category_id,
             person_id=person.id if person else None,
             tx_type=args.get("type"), q=args.get("text"),
-            limit=min(args.get("limit") or 50, 200),
+            # Default 20, hard cap 50. At limit=50 a single result was measured
+            # at ~7,579 tokens — more than the system prompt and all 11 tool
+            # schemas combined — and it scales with the user's history. This is
+            # the largest single cost driver in a chat turn.
+            limit=min(args.get("limit") or 20, 50),
         )
-        return _ok({"count": len(rows), "transactions": rows})
+        return _ok({"count": len(rows), "transactions": [_slim_tx(r) for r in rows]})
     except Exception as exc:
         return _err(str(exc))
     finally:
@@ -277,7 +313,7 @@ async def query_transactions(user_id: int, args: dict[str, Any]) -> dict:
             "mode": {"type": "string",
                      "enum": ["monthly", "categories", "accounts", "persons",
                               "budgets", "networth", "recurring"]},
-            "months": {"type": "integer"},
+            "months": {"type": "integer", "default": 6, "maximum": 24},
             "month": {"type": "string"},
             "from": {"type": "string"},
             "to": {"type": "string"},
@@ -295,7 +331,7 @@ async def get_summary(user_id: int, args: dict[str, Any]) -> dict:
     try:
         mode = args["mode"]
         if mode == "monthly":
-            return _ok(summary_svc.monthly(db, user_id, args.get("months") or 6))
+            return _ok(summary_svc.monthly(db, user_id, min(args.get("months") or 6, 24)))
         if mode == "categories":
             today = today_ist()
             date_from = args.get("from") or f"{today[:7]}-01"
@@ -308,7 +344,7 @@ async def get_summary(user_id: int, args: dict[str, Any]) -> dict:
         if mode == "budgets":
             return _ok(budgets_svc.list_budgets(db, user_id, args.get("month") or today_ist()[:7]))
         if mode == "networth":
-            return _ok(summary_svc.networth(db, user_id, args.get("months") or 12))
+            return _ok(summary_svc.networth(db, user_id, min(args.get("months") or 12, 24)))
         if mode == "recurring":
             return _ok({"rules": recurring_svc.list_rules(db, user_id), "due": recurring_svc.due_items(db, user_id)})
         return _err(f"unknown mode {mode}")

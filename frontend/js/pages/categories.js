@@ -1,8 +1,8 @@
 import { html, useState } from "../html.js";
 import { api } from "../api.js";
-import { splitCategoryName } from "../format.js";
 import { invalidate } from "../store.js";
-import { Chips, Seg, Sheet, slotColor, toast, useStore } from "../components/ui.js";
+import { CategoryTile, Chips, Seg, Sheet, slotColor, toast, useStore } from "../components/ui.js";
+import { Icon, P } from "../icons.js";
 
 /* Edit one category: rename, recolor (parents only — children inherit),
    delete, or merge into another category of the same kind. */
@@ -47,8 +47,7 @@ function CategorySheet({ category, isChild, kind, onClose }) {
     run(() => api.deleteCategory(category.id, mergeTarget), (r) => `Moved ${r.moved} transactions`);
 
   return html`
-    <${Sheet} onClose=${onClose}>
-      <h2>Edit category</h2>
+    <${Sheet} title="Edit category" onClose=${onClose}>
       <div class="field">
         <label>Name</label>
         <input type="text" value=${name} onInput=${(e) => setName(e.target.value)} />
@@ -56,7 +55,7 @@ function CategorySheet({ category, isChild, kind, onClose }) {
       ${!isChild &&
       html`
         <div class="field">
-          <label>Color</label>
+          <div class="field-label">Color</div>
           <div class="swatches">
             ${[0, 1, 2, 3, 4, 5, 6, 7].map(
               (i) => html`
@@ -69,8 +68,8 @@ function CategorySheet({ category, isChild, kind, onClose }) {
         </div>
       `}
       <button class="btn" disabled=${!name.trim() || saving} onClick=${save}>Save changes</button>
-      <div class="field" style="margin-top:18px">
-        <label>Danger zone</label>
+      <div class="field" style="margin-top:22px">
+        <div class="field-label">Danger zone</div>
         <div class="chips">
           <button class="chip" onClick=${remove} disabled=${saving}>Delete</button>
           <button class="chip ${merging ? "sel" : ""}" onClick=${() => setMerging(!merging)}>Merge into…</button>
@@ -80,7 +79,7 @@ function CategorySheet({ category, isChild, kind, onClose }) {
           <div style="margin-top:10px">
             <${Chips} items=${targets} value=${mergeTarget} onChange=${setMergeTarget} allowNone />
             ${mergeTarget &&
-            html`<button class="btn danger" style="margin-top:10px" disabled=${saving} onClick=${merge}>
+            html`<button class="btn" style="margin-top:10px" disabled=${saving} onClick=${merge}>
               Move transactions & delete
             </button>`}
           </div>
@@ -115,7 +114,7 @@ function NewCategoryRow({ kind, onDone }) {
       <input type="text" value=${name} placeholder="Name"
         onInput=${(e) => setName(e.target.value)} />
       <div style="margin-top:8px">
-        <label style="font-size:12px; color:var(--muted)">Optional parent (makes it a subcategory)</label>
+        <div class="muted" style="font-size:12.5px; margin-bottom:8px">Optional parent (makes it a subcategory)</div>
         <${Chips} items=${parents} value=${parentId} onChange=${setParentId} allowNone />
       </div>
       <button class="btn" style="margin-top:10px" disabled=${!name.trim()} onClick=${add}>Add</button>
@@ -129,32 +128,29 @@ export function ManageCategoriesSheet({ onClose }) {
   const [editing, setEditing] = useState(null); // {category, isChild}
   const list = categories.filter((c) => c.kind === kind);
 
-  const row = (cat, isChild) => {
-    const { icon, label } = splitCategoryName(cat.name);
-    return html`
-      <button class="catrow ${isChild ? "child" : ""}" key=${cat.id}
-        onClick=${() => setEditing({ category: cat, isChild })}>
-        <span class="swatch" style="background:${slotColor(cat.color_slot)}"></span>
-        <span class="grow" style="text-align:left">${icon ? `${icon} ` : ""}${label || cat.name}</span>
-        <span class="muted">›</span>
-      </button>
-    `;
-  };
+  const row = (cat, isChild, slot) => html`
+    <button class="catrow ${isChild ? "child" : ""}" key=${cat.id}
+      onClick=${() => setEditing({ category: cat, isChild })}>
+      <${CategoryTile} name=${cat.name} slot=${slot} small=${isChild} />
+      <span class="grow ellipsis">${cat.name}</span>
+      <${Icon} d=${P.chevR} size=${16} sw=${2} />
+    </button>
+  `;
 
   return html`
-    <${Sheet} onClose=${onClose}>
-      <h2>Categories</h2>
+    <${Sheet} title="Categories" onClose=${onClose}>
       <${Seg}
         options=${[
-          { value: "expense", label: "Expenses", cls: "exp" },
-          { value: "income", label: "Income", cls: "inc" },
+          { value: "expense", label: "Expenses" },
+          { value: "income", label: "Income" },
         ]}
         value=${kind} onChange=${setKind}
       />
-      <div style="margin-top:10px">
-        ${list.map((p) => html`${row(p, false)}${p.children.map((ch) => row(ch, true))}`)}
-        ${list.length === 0 && html`<div class="muted" style="padding:12px 0">None yet.</div>`}
-      </div>
+      ${list.length > 0
+        ? html`<div class="list-group">
+            ${list.map((p) => html`${row(p, false, p.color_slot)}${p.children.map((ch) => row(ch, true, p.color_slot))}`)}
+          </div>`
+        : html`<div class="muted" style="padding:12px 0">None yet.</div>`}
       <${NewCategoryRow} kind=${kind} />
       ${editing &&
       html`<${CategorySheet} category=${editing.category} isChild=${editing.isChild} kind=${kind}

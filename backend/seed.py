@@ -14,7 +14,8 @@ from sqlalchemy import delete, select, text
 
 from backend.db import SessionLocal, engine
 from backend.models import (
-    Account, Base, Budget, Category, Conversation, ImportBatch, Person,
+    Account, AdTicket, AiUsage, Base, Budget, Category, Conversation,
+    CreditBalance, CreditLedger, ImportBatch, ParsePattern, Person,
     RecurringRule, Transaction,
 )
 from backend.users import get_user
@@ -126,16 +127,30 @@ def seed_sample(db, user_id: int) -> None:
     print(f"Seeded {len(txs)} sample transactions.")
 
 
-def wipe(db, user_id: int) -> None:
-    """Delete one user's rows, FK-safe order. Keeps schema and other users."""
+def wipe(db, user_id: int, *, include_credits: bool = False) -> None:
+    """Delete one user's rows, FK-safe order. Keeps schema and other users.
+
+    ParsePattern must go before the categories/accounts/persons it references,
+    and AiUsage/AdTicket first since nothing depends on them.
+
+    Credit balances and the credit ledger are NOT wiped by default: --wipe means
+    "delete my financial data", and silently destroying purchased entitlements
+    plus the audit trail that proves them is exactly the kind of trust failure
+    the three-bucket design exists to avoid. --wipe-credits opts in.
+    """
+    models = [AiUsage, AdTicket, ParsePattern, Transaction, Budget, RecurringRule,
+              ImportBatch, Person, Account, Category, Conversation]
+    if include_credits:
+        models += [CreditLedger, CreditBalance]
     counts = {}
-    for model in (Transaction, Budget, RecurringRule, ImportBatch, Person,
-                  Account, Category, Conversation):
+    for model in models:
         counts[model.__tablename__] = db.execute(
             delete(model).where(model.user_id == user_id)).rowcount
     db.commit()
     for table, n in counts.items():
         print(f"wiped {table}: {n} rows")
+    if not include_credits:
+        print("kept credit_balances + credit_ledger (use --wipe-credits to clear them)")
 
 
 def main() -> None:
@@ -150,8 +165,8 @@ def main() -> None:
         if not user:
             print(f"No such user '{username}' — create it with python -m backend.users add")
             sys.exit(1)
-        if "--wipe" in sys.argv:
-            wipe(db, user.id)
+        if "--wipe" in sys.argv or "--wipe-credits" in sys.argv:
+            wipe(db, user.id, include_credits="--wipe-credits" in sys.argv)
             return
         if db.scalar(select(Category).where(Category.user_id == user.id)):
             print("Categories already exist for this user — not seeding defaults.")

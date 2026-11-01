@@ -85,8 +85,14 @@ class AgentSession:
             max_buffer_size=32 * 1024 * 1024,
             max_turns=25,
             model=settings.AGENT_MODEL,
+            # An overloaded primary would otherwise error the SSE stream and take
+            # the session down with it (see routers/chat.py's except branch).
+            fallback_model=settings.AGENT_FALLBACK_MODEL,
             env=env,
             cwd=str(settings.PROJECT_ROOT),
+            # tools=[] keeps the CLI's built-in preset out of the turn entirely.
+            # Only the money MCP tools remain, which is all this agent ever uses.
+            **({"tools": []} if settings.AGENT_LEAN_TOOLS else {}),
         )
         client = ClaudeSDKClient(options=options)
         await client.connect()

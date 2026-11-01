@@ -1,34 +1,18 @@
 """System prompt for the money chat agent — rebuilt on every connect/reset so
 today's date and the account/category/person lists stay fresh."""
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.models import Account, Category, Person
+from backend.services import refdata
 from backend.utils import today_ist
 
 
 def build_system_prompt(db: Session, user_id: int) -> str:
-    accounts = db.scalars(select(Account).where(
-        ~Account.is_archived, Account.user_id == user_id).order_by(Account.name)).all()
-    categories = db.scalars(select(Category).where(
-        Category.user_id == user_id).order_by(Category.kind, Category.name)).all()
-    persons = db.scalars(select(Person).where(
-        Person.user_id == user_id).order_by(Person.name)).all()
-
-    account_lines = "\n".join(f"- {a.name} ({a.type})" for a in accounts) or "- (none yet)"
-
-    parents = [c for c in categories if c.parent_id is None]
-    children: dict[int, list[str]] = {}
-    for c in categories:
-        if c.parent_id:
-            children.setdefault(c.parent_id, []).append(c.name)
-    cat_lines = "\n".join(
-        f"- {p.name} ({p.kind})" + (f" — subcategories: {', '.join(children[p.id])}" if p.id in children else "")
-        for p in parents
-    ) or "- (none yet)"
-
-    person_lines = ", ".join(p.name for p in persons) or "(none yet)"
+    # Queries live in services/refdata.py, shared with the quick-add prompt builder.
+    vocab = refdata.build_context(db, user_id)
+    account_lines = refdata.account_lines(vocab)
+    cat_lines = refdata.category_lines(vocab, inline_children=True)
+    person_lines = refdata.person_line(vocab)
 
     return f"""You are the personal finance assistant inside the user's own money-tracking app.
 Today's date is {today_ist()} (IST). The user is in India; the default currency is INR (₹).
@@ -53,7 +37,7 @@ All amounts you pass to tools are in rupees (decimals allowed).
 5. "X owes me", "I lent", "borrowed from", "paid X back" → use add_loan_entry (kinds: lend, borrow, repay_in = they paid me back, repay_out = I paid them back). New person names are created automatically.
 6. Shared bills ("I paid 1200 for dinner, Raj owes half") → add_split_expense: my share is the expense, their share is a lend.
 7. Before updating or deleting anything, find the exact transaction with query_transactions and confirm the id. If several match, ask which one.
-8. Answer questions about spending using get_summary / query_transactions — never from memory. Format amounts like ₹1,23,456.78. get_summary also covers mode='budgets' (limits vs spend), mode='networth' (balance over time), mode='recurring' (recurring rules + what's due), and card statement cycles inside mode='accounts'.
+8. Answer questions about spending using get_summary / query_transactions — never from memory. Format amounts like ₹1,23,456.78. get_summary also covers mode='budgets' (limits vs spend), mode='networth' (balance over time), mode='recurring' (recurring rules + what's due), and card statement cycles inside mode='accounts'. PREFER get_summary for any "how much"/"total"/"where did it go" question — it returns a handful of numbers, while query_transactions returns whole rows and is many times larger. Use query_transactions only when you need individual entries, e.g. to find the id of something to update or delete, and keep its limit small.
 9. Keep replies short and conversational. After recording, confirm in one line what was saved (amount, category, account). If you created a new category or person, mention it.
 10. If a request is ambiguous, ask — one question, not a list. Otherwise act without asking.
 11. Attached files (paths appear in the message): always start with inspect_file.

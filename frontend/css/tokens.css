@@ -1,75 +1,141 @@
 /* Design tokens — light values on :root, dark under prefers-color-scheme.
-   Palette = validated reference instance from the dataviz method. */
+   Light values come from the UI redesign (money-manager-ui-design.zip): cool
+   grey page, white bordered cards, one indigo accent. Dark is its own set of
+   steps, not an automatic flip. Text pairs are WCAG AA (>= 4.5:1) in both modes;
+   the categorical slots were run through the dataviz validator against the
+   card surface of each mode. */
+
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/vendor/fonts/geist-latin-wght-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+/* latin-ext carries ₹ (U+20B9) */
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/vendor/fonts/geist-latin-ext-wght-normal.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
 
 :root {
   color-scheme: light;
+  --font: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
 
-  --page: #f9f9f7;
-  --surface: #fcfcfb;
-  --surface-2: #f0efec;
-  --ink: #0b0b0b;
-  --ink-2: #52514e;
-  --muted: #898781;
-  --grid: #e1e0d9;
-  --baseline: #c3c2b7;
-  --border: rgba(11, 11, 11, 0.1);
+  --page: #f4f5f8;
+  --surface: #ffffff;
+  --surface-2: #f4f5f8;   /* wells inside cards & sheets: close button, segmented track */
+  --surface-3: #e9ebf0;   /* segmented track on the page, pressed rows */
+  --ink: #0f1222;
+  --ink-2: #4a5068;
+  --muted: #5e647a;
+  --faint: #9298ab;       /* disabled labels only — never body text */
+  --border: #e4e6ec;
+  --grid: #eceef3;        /* in-card dividers, progress tracks */
+  --baseline: #cdd2e0;    /* context bars, grabber */
 
   /* categorical series slots (fixed order — color follows the category) */
-  --series-1: #2a78d6;
-  --series-2: #eb6834;
-  --series-3: #1baf7a;
-  --series-4: #eda100;
-  --series-5: #e87ba4;
-  --series-6: #008300;
-  --series-7: #4a3aa7;
-  --series-8: #e34948;
+  --series-1: #3346d3;
+  --series-2: #e06a1b;
+  --series-3: #0e9e8f;
+  --series-4: #d89a00;
+  --series-5: #c2477a;
+  --series-6: #2f9e44;
+  --series-7: #7b4fd6;
+  --series-8: #d9443f;
 
-  /* semantic money colors (app-wide: income blue, expense red) */
-  --income: #2a78d6;
-  --expense: #e34948;
-  --transfer: #898781;
-  --good-text: #006300;
+  /* money semantics: income is green, spending stays in ink with a minus sign */
+  --income: #0b7a4b;
+  --income-soft: #e6f6ee;
+  --expense: var(--ink);
+  --transfer: var(--muted);
+  --good-text: #0b7a4b;
 
-  --accent: #2a78d6;
+  --accent: #3346d3;          /* fills: buttons, user bubbles, bars */
   --accent-ink: #ffffff;
-  --danger: #d03b3b;
+  --accent-text: #3346d3;     /* accent used as text on a surface */
+  --accent-soft: #eef0fc;
+  --accent-soft-ink: #2535a8;
 
-  --radius: 14px;
-  --radius-sm: 9px;
-  --tab-h: 56px;
-  --shadow: 0 1px 3px rgba(11, 11, 11, 0.07), 0 4px 16px rgba(11, 11, 11, 0.05);
-  --shadow-sheet: 0 -8px 32px rgba(11, 11, 11, 0.16);
+  --warn: #c98a00;
+  --warn-soft: #fff4e5;
+  --warn-ink: #7a4300;
+  --danger: #c2410c;
+  --danger-text: #b33a0b;
+
+  /* inverted hero card (net worth) */
+  --hero: #0f1222;
+  --hero-ink: #ffffff;
+  --hero-muted: #b9bed0;
+  --hero-line: #2a2f45;
+
+  --radius: 20px;     /* cards */
+  --radius-md: 16px;  /* list cards, docked inputs */
+  --radius-sm: 12px;  /* fields, icon buttons, tiles */
+  --tab-h: 62px;
+  --shadow-pop: 0 1px 3px rgba(15, 18, 34, 0.1);
+  --shadow-float: 0 4px 18px rgba(15, 18, 34, 0.12);
+  --shadow-sheet: 0 -8px 32px rgba(15, 18, 34, 0.18);
+  --backdrop: rgba(15, 18, 34, 0.5);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
 
-    --page: #0d0d0d;
-    --surface: #1a1a19;
-    --surface-2: #262624;
-    --ink: #ffffff;
-    --ink-2: #c3c2b7;
-    --muted: #898781;
-    --grid: #2c2c2a;
-    --baseline: #383835;
-    --border: rgba(255, 255, 255, 0.1);
+    --page: #0b0d16;
+    --surface: #161925;
+    --surface-2: #1f2332;
+    --surface-3: #262b3c;
+    --ink: #f2f3f7;
+    --ink-2: #b6bbcd;
+    --muted: #8e94aa;
+    --faint: #5e647a;
+    --border: #272c3d;
+    --grid: #20253a;
+    --baseline: #3a4058;
 
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --series-3: #199e70;
-    --series-4: #c98500;
-    --series-5: #d55181;
-    --series-6: #008300;
-    --series-7: #9085e9;
-    --series-8: #e66767;
+    --series-1: #5b6ceb;
+    --series-2: #d9632a;
+    --series-3: #109a8c;
+    --series-4: #b88400;
+    --series-5: #d25f90;
+    --series-6: #2a9640;
+    --series-7: #8c6be6;
+    --series-8: #e0524e;
 
-    --income: #3987e5;
-    --expense: #e66767;
-    --good-text: #0ca30c;
+    --income: #3fc48b;
+    --income-soft: #12301f;
+    --good-text: #3fc48b;
 
-    --accent: #3987e5;
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
-    --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.5);
+    --accent: #5466e8;
+    --accent-text: #8c99f7;
+    --accent-soft: #232a4d;
+    --accent-soft-ink: #b3bcff;
+
+    --warn: #d9a21a;
+    --warn-soft: #2e2310;
+    --warn-ink: #f2c27a;
+    --danger: #e8693a;
+    --danger-text: #f28a5c;
+
+    --hero: #20253b;
+    --hero-ink: #ffffff;
+    --hero-muted: #a7adc2;
+    --hero-line: #343a55;
+
+    --shadow-pop: 0 1px 3px rgba(0, 0, 0, 0.5);
+    --shadow-float: 0 4px 18px rgba(0, 0, 0, 0.45);
+    --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.55);
+    --backdrop: rgba(0, 0, 0, 0.6);
   }
 }

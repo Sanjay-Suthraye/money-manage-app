@@ -8,14 +8,10 @@ export function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-export function seriesColor(slot) {
-  return cssVar(`--series-${(slot % 8) + 1}`);
-}
-
 export function applyChartDefaults() {
   const { Chart } = window;
   if (!Chart) return;
-  Chart.defaults.font.family = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+  Chart.defaults.font.family = cssVar("--font");
   Chart.defaults.font.size = 11.5;
   Chart.defaults.color = cssVar("--muted");
   Chart.defaults.borderColor = cssVar("--grid");

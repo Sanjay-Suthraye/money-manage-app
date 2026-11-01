@@ -11,11 +11,13 @@ const inrWhole = new Intl.NumberFormat("en-IN", {
   maximumFractionDigits: 0,
 });
 
-/* Whole rupees stay clean (₹1,250); paise show both digits (₹487.80). */
+/* Whole rupees stay clean (₹1,250); paise show both digits (₹487.80).
+   Negatives get a true minus sign (−₹450), matching the signed list amounts. */
 export function fmt(amount) {
-  return Number.isInteger(Math.round(amount * 100) / 100) && amount % 1 === 0
+  const out = Number.isInteger(Math.round(amount * 100) / 100) && amount % 1 === 0
     ? inrWhole.format(amount)
     : inrPaise.format(amount);
+  return out.replace("-", "−");
 }
 
 export function fmtWhole(amount) {
@@ -58,13 +60,6 @@ export function monthBounds(month) {
   return [`${month}-01`, `${month}-${String(last).padStart(2, "0")}`];
 }
 
-export function dayLabel(iso) {
-  const [y, m, d] = iso.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  const wd = date.toLocaleDateString("en-IN", { weekday: "short" });
-  return { day: String(d).padStart(2, "0"), weekday: wd };
-}
-
 export function shortMonth(month) {
   const [y, m] = month.split("-").map(Number);
   return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "short" });
@@ -91,4 +86,31 @@ export function splitCategoryName(name) {
 export function shortDate(iso) {
   const d = new Date(`${iso}T00:00:00`);
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+
+/* "2026-10-31" -> "Sat, 31 Oct" (year added when it isn't this year) */
+export function dayHeading(iso) {
+  const d = new Date(`${iso}T00:00:00`);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  const wd = d.toLocaleDateString("en-IN", { weekday: "short" });
+  const dm = d.toLocaleDateString("en-IN", { day: "numeric", month: "short", ...(sameYear ? {} : { year: "numeric" }) });
+  return `${wd}, ${dm}`;
+}
+
+/* Date-field label: "Today, 1 Nov" · "Yesterday, 31 Oct" · "Fri, 30 Oct" */
+export function friendlyDate(iso) {
+  if (!iso) return "Pick a date";
+  const today = todayISO();
+  const y = new Date(`${today}T00:00:00`);
+  y.setDate(y.getDate() - 1);
+  const yesterday = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, "0")}-${String(y.getDate()).padStart(2, "0")}`;
+  if (iso === today) return `Today, ${shortDate(iso)}`;
+  if (iso === yesterday) return `Yesterday, ${shortDate(iso)}`;
+  return dayHeading(iso);
+}
+
+/* Signed money for lists: "+₹1,200" / "−₹450" (true minus sign, not a hyphen). */
+export function fmtSigned(amount) {
+  if (!amount) return fmt(0);
+  return `${amount > 0 ? "+" : "−"}${fmt(Math.abs(amount))}`;
 }

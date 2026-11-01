@@ -18,11 +18,23 @@ async function request(path, options = {}) {
   notifyUnauthorized(res, path);
   if (!res.ok) {
     let detail = res.statusText;
+    let info = null;
     try {
       const data = await res.json();
-      detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+      if (typeof data.detail === "string") {
+        detail = data.detail;
+      } else if (data.detail) {
+        /* Structured errors (402 out_of_credits, 429 goodwill_rate_limited)
+           carry a message plus context the UI needs. Flattening them to a JSON
+           blob in the toast, as this used to, made them unusable. */
+        info = data.detail;
+        detail = info.message || JSON.stringify(info);
+      }
     } catch { /* keep statusText */ }
-    throw new Error(detail);
+    const err = new Error(detail);
+    err.status = res.status;
+    err.info = info;
+    throw err;
   }
   if (res.status === 204) return null;
   return res.json();
@@ -82,6 +94,14 @@ export const api = {
   summaryCategories: (from, to, kind = "expense") =>
     request(`/summary/categories?from=${from}&to=${to}&kind=${kind}`),
 
+  /* Quick add: parse is a preview and never writes; confirm commits through the
+     same validated path as the normal transaction form. */
+  quickAddParse: (text) => request("/quickadd/parse", { method: "POST", body: { text } }),
+  quickAddConfirm: (body) => request("/quickadd/confirm", { method: "POST", body }),
+
+  credits: () => request("/credits"),
+  creditsGoodwill: () => request("/credits/goodwill", { method: "POST", body: {} }),
+
   chatReset: () => request("/chat/reset", { method: "POST" }),
   chatHistory: () => request("/chat/history"),
   chatStop: () => request("/chat/stop", { method: "POST", body: {} }),
@@ -116,9 +136,16 @@ export async function streamChat(message, attachments, { onDelta, onTool, onDone
     if (!res.ok || !res.body) {
       notifyUnauthorized(res);
       let detail = res.statusText;
-      try { detail = (await res.json()).detail || detail; } catch { /* ignore */ }
+      let info = null;
+      try {
+        const data = await res.json();
+        if (typeof data.detail === "string") detail = data.detail;
+        else if (data.detail) { info = data.detail; detail = info.message || detail; }
+      } catch { /* ignore */ }
       settled = true;
-      onError?.(detail);
+      /* info is how the chat renders a calm "out of AI entries" card instead of
+         a red error — see pages/chat.js onError. */
+      onError?.(detail, info);
       return;
     }
     const reader = res.body.getReader();
@@ -143,7 +170,12 @@ export async function streamChat(message, attachments, { onDelta, onTool, onDone
         if (event === "delta") onDelta?.(payload.text);
         else if (event === "tool") onTool?.(payload);
         else if (event === "done") { settled = true; onDone?.(payload); }
-        else if (event === "error") { settled = true; onError?.(payload.message); }
+        else if (event === "error") {
+          settled = true;
+          /* An in-stream error may also be the structured out-of-credits body
+             (a race against another tab), so pass it through the same way. */
+          onError?.(payload.message || payload.error, payload.error ? payload : null);
+        }
       }
     }
     // Stream ended without a done/error frame (connection drop, server restart).

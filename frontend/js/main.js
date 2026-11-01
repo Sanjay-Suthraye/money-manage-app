@@ -43,11 +43,12 @@ function App() {
 
   return html`
     <${active.component} />
-    <nav class="tabbar">
+    <nav class="tabbar" aria-label="Main">
       ${TABS.map(
         (t) => html`
           <button
             class=${t.id === tab ? "active" : ""}
+            aria-current=${t.id === tab ? "page" : null}
             onClick=${() => { location.hash = `#/${t.id}`; }}
           >
             ${t.icon}
@@ -84,7 +85,10 @@ function LoginView() {
   return html`
     <div class="login-page">
       <form class="login-card" onSubmit=${submit}>
-        <h1>₹ Money</h1>
+        <div class="login-brand">
+          <div class="logo" aria-hidden="true">₹</div>
+          <h1>Money Manager</h1>
+        </div>
         <div class="field">
           <label>Username</label>
           <input
@@ -126,6 +130,11 @@ function Root() {
       .authMe()
       .then((s) => {
         store.username = s.username || null;
+        /* /me carries the AI credit balance, so every page has it via
+           useStore() without its own fetch. It is also what triggers the lazy
+           monthly grant server-side. */
+        store.credits = s.credits || null;
+        store.chatEnabled = s.chat_enabled !== false;
         setAuth(s.authenticated ? "ready" : "login");
       })
       .catch(() => setAuth("ready")); // /me unreachable → let App surface errors

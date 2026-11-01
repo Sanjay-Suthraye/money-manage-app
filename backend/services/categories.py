@@ -7,7 +7,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.models import Category, Transaction
+from backend.models import Category, ParsePattern, Transaction
 from backend.schemas import CategoryPatch
 
 
@@ -94,6 +94,12 @@ def delete_category(db: Session, user_id: int, cat_id: int, reassign_to: int | N
     moved = _tx_count(db, ids)
     db.execute(
         update(Transaction).where(Transaction.category_id.in_(ids)).values(category_id=target.id)
+    )
+    # Learned quick-add patterns point at categories too; without this they would
+    # be left dangling at a deleted id and silently stop matching.
+    db.execute(
+        update(ParsePattern).where(ParsePattern.category_id.in_(ids))
+        .values(category_id=target.id)
     )
     for ch in children:
         db.delete(ch)

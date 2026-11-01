@@ -1,17 +1,91 @@
 import { html, useEffect, useState } from "../html.js";
 import { api } from "../api.js";
 import { fmt, shortDate, todayISO } from "../format.js";
+import { Icon, P } from "../icons.js";
 import { invalidate, store } from "../store.js";
 import { AmountInput, Chips, Sheet, toast, useApi, useStore } from "../components/ui.js";
 import { TxEditor, TxRow } from "./transactions.js";
 import { isHidden, subscribePending } from "../pendingDelete.js";
+import { SettingsSheet } from "./settings.js";
 
+/* Display groups, in page order (credit cards render as their own cards above
+   these). Every ACCOUNT_TYPES value lands in exactly one place. */
 const GROUPS = [
-  { type: "cash", label: "Cash" },
-  { type: "bank", label: "Bank" },
-  { type: "credit_card", label: "Credit cards" },
-  { type: "wallet", label: "Wallets" },
+  { types: ["bank"], label: "Bank" },
+  { types: ["wallet", "cash"], label: "Wallets & cash" },
 ];
+const TYPE_CHOICES = [
+  { id: "bank", name: "Bank" },
+  { id: "credit_card", name: "Credit card" },
+  { id: "wallet", name: "Wallet" },
+  { id: "cash", name: "Cash" },
+];
+const TYPE_SUB = { bank: "Bank account", wallet: "Wallet", cash: "In hand", credit_card: "Credit card" };
+
+/* "HDFC Savings" -> "HD"; cash gets the rupee sign. */
+function monogram(acc) {
+  if (acc.type === "cash") return "₹";
+  const word = acc.name.replace(/[^\p{L}\p{N} ]/gu, "").trim().split(/\s+/)[0] || acc.name;
+  return word.slice(0, 2).toUpperCase();
+}
+
+const DAY_MS = 86400000;
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const addDays = (iso, n) => { const d = new Date(`${iso}T00:00:00`); d.setDate(d.getDate() + n); return isoDay(d); };
+const daysBetween = (a, b) => Math.round((new Date(`${b}T00:00:00`) - new Date(`${a}T00:00:00`)) / DAY_MS);
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/* Credit card: outstanding, statement countdown, cycle progress, pay button.
+   cycle.start is the last statement date, so the cycle runs start+1 .. next. */
+function CardTile({ acc, onOpen, onPay }) {
+  const c = acc.cycle;
+  const cycleLen = c ? daysBetween(c.start, c.statement_date) : 0;
+  const cycleDay = c ? cycleLen - c.statement_in_days : 0;
+  const owes = acc.outstanding > 0;
+  let when = "Set a statement day to track the cycle";
+  if (c) {
+    when = c.statement_in_days === 0 ? "Statement today" : `Statement in ${plural(c.statement_in_days, "day")}`;
+    if (c.due_date) when += ` · Due ${shortDate(c.due_date)}`;
+  }
+  return html`
+    <div class="card cc">
+      <button class="cc-head" onClick=${onOpen}>
+        <div class="grow">
+          <div class="name ellipsis">${acc.name}</div>
+          <div class="sub">${when}</div>
+        </div>
+        <div class="right">
+          <div class="amt tnum">${fmt(owes ? acc.outstanding : Math.max(acc.balance, 0))}</div>
+          <div class="sub">${owes ? "outstanding" : acc.balance > 0 ? "in credit" : "no dues"}</div>
+        </div>
+      </button>
+      ${c &&
+      html`<div>
+        <div class="bar" role="img" aria-label=${`Day ${cycleDay} of ${cycleLen} in this statement cycle`}>
+          <div class="fill warn" style=${`width:${cycleLen ? Math.min(cycleDay / cycleLen, 1) * 100 : 0}%`}></div>
+        </div>
+        <div class="cc-meta">
+          <span>Cycle ${shortDate(addDays(c.start, 1))} – ${shortDate(c.statement_date)} · ${fmt(c.spend)} spent</span>
+          <span style="white-space:nowrap">Day ${cycleDay} of ${cycleLen}</span>
+        </div>
+      </div>`}
+      ${owes && html`<button class="btn sm" onClick=${onPay}>Pay bill from bank</button>`}
+    </div>
+  `;
+}
+
+function AccountRow({ acc, onOpen }) {
+  return html`
+    <button class="acct" onClick=${onOpen}>
+      <span class="tile mono" aria-hidden="true">${monogram(acc)}</span>
+      <span class="grow">
+        <span class="name ellipsis" style="display:block">${acc.name}</span>
+        <span class="sub" style="display:block">${TYPE_SUB[acc.type] || acc.type}</span>
+      </span>
+      <span class="bal tnum">${fmt(acc.balance)}</span>
+    </button>
+  `;
+}
 
 /* One-tap card repayment: a transfer bank -> card, prefilled to full outstanding. */
 function PayCardSheet({ card, onClose, onSaved }) {
@@ -46,10 +120,9 @@ function PayCardSheet({ card, onClose, onSaved }) {
   }
 
   return html`
-    <${Sheet} onClose=${onClose}>
-      <h2>Pay ${card.name}</h2>
+    <${Sheet} title=${`Pay ${card.name}`} onClose=${onClose}>
       <div class="field">
-        <label>Amount</label>
+        <div class="field-label">Amount</div>
         <div class="chips" style="margin-bottom:10px">
           <button class="chip ${mode === "full" ? "sel" : ""}" onClick=${() => setMode("full")}>
             Full outstanding · ${fmt(card.outstanding)}
@@ -60,7 +133,7 @@ function PayCardSheet({ card, onClose, onSaved }) {
         html`<${AmountInput} value=${custom} onChange=${setCustom} currency="INR" autofocus />`}
       </div>
       <div class="field">
-        <label>From account</label>
+        <div class="field-label">From account</div>
         <${Chips} items=${banks} value=${fromId} onChange=${setFromId} />
       </div>
       <button class="btn" disabled=${!valid || saving} onClick=${pay}>
@@ -129,15 +202,14 @@ function EditAccountSheet({ account, onClose, onSaved }) {
   `;
 
   return html`
-    <${Sheet} onClose=${onClose}>
-      <h2>Edit account</h2>
+    <${Sheet} title="Edit account" onClose=${onClose}>
       <div class="field">
         <label>Name</label>
         <input type="text" value=${name} onInput=${(e) => setName(e.target.value)} />
       </div>
       <div class="field">
-        <label>Type</label>
-        <${Chips} items=${GROUPS.map((g) => ({ id: g.type, name: g.label }))} value=${type} onChange=${setType} />
+        <div class="field-label">Type</div>
+        <${Chips} items=${TYPE_CHOICES} value=${type} onChange=${setType} />
       </div>
       ${type === "credit_card" &&
       html`
@@ -173,18 +245,18 @@ function AccountDetail({ account, onClose }) {
   const txs = data?.filter((tx) => !isHidden(tx.id));
   return html`
     <${Sheet} onClose=${onClose}>
-      <div class="spread" style="margin-bottom:4px">
-        <h2 style="margin:0">${account.name}</h2>
-        <div class="row" style="display:flex; align-items:center; gap:10px">
-          <button class="chip" onClick=${() => setEditing(true)}>Edit</button>
-          <div class="amt tnum" style="font-weight:700; font-size:18px">${fmt(account.balance)}</div>
+      <div class="sheet-head" style="margin-bottom:4px">
+        <h2 class="ellipsis">${account.name}</h2>
+        <div class="row">
+          <div class="tnum" style="font-weight:700; font-size:18px">${fmt(account.balance)}</div>
+          <button class="chip sm" onClick=${() => setEditing(true)}>Edit</button>
         </div>
       </div>
       ${account.cycle &&
       html`<div class="muted" style="font-size:13px; margin-bottom:6px">
         This cycle ${fmt(account.cycle.spend)} · statement ${shortDate(account.cycle.statement_date)}${account.cycle.due_date ? ` · due ${shortDate(account.cycle.due_date)}` : ""}
       </div>`}
-      <div class="muted" style="font-size:13px; margin-bottom:10px">Recent transactions</div>
+      <div class="field-label" style="margin:14px 0 2px">Recent transactions</div>
       ${(txs || []).map((tx) => html`<${TxRow} key=${tx.id} tx=${tx} onClick=${() => setEditTx(tx)} />`)}
       ${txs?.length === 0 && html`<div class="muted" style="padding:16px 0">No transactions yet.</div>`}
       ${editTx &&
@@ -220,17 +292,14 @@ function NewAccountSheet({ onClose, onSaved }) {
     }
   }
   return html`
-    <${Sheet} onClose=${onClose}>
-      <h2>New account</h2>
+    <${Sheet} title="New account" onClose=${onClose}>
       <div class="field">
         <label>Name</label>
         <input type="text" value=${name} onInput=${(e) => setName(e.target.value)} placeholder="e.g. SBI Savings" />
       </div>
       <div class="field">
-        <label>Type</label>
-        <${Chips}
-          items=${GROUPS.map((g) => ({ id: g.type, name: g.label }))}
-          value=${type} onChange=${setType} />
+        <div class="field-label">Type</div>
+        <${Chips} items=${TYPE_CHOICES} value=${type} onChange=${setType} />
       </div>
       <div class="field">
         <label>${type === "credit_card" ? "Current outstanding (optional)" : "Opening balance"}</label>
@@ -250,78 +319,76 @@ export function AccountsPage() {
   const [detail, setDetail] = useState(null);
   const [adding, setAdding] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const { data: accounts } = useApi(() => api.accounts({ include_archived: true }), [refresh, store.accounts]);
 
   const list = (accounts || []).filter((a) => !a.is_archived);
   const archived = (accounts || []).filter((a) => a.is_archived);
   const netWorth = list.reduce((sum, a) => sum + a.balance, 0);
+  const assets = list.reduce((sum, a) => sum + Math.max(a.balance, 0), 0);
+  const owed = list.reduce((sum, a) => sum + Math.max(-a.balance, 0), 0);
+  // "Card dues" when every negative balance is a card; otherwise say what it is.
+  const owedIsCards = list.every((a) => a.balance >= 0 || a.type === "credit_card");
+  const cards = list.filter((a) => a.type === "credit_card");
 
   return html`
     <div class="page">
-      <div class="topbar"><h1>Accounts</h1></div>
-      <div class="networth card">
-        <div class="lab">Net worth</div>
-        <div class="val tnum">${fmt(netWorth)}</div>
+      <div class="topbar">
+        <h1>Accounts</h1>
+        <div class="topbar-actions">
+          <button class="iconbtn" onClick=${() => setAdding(true)} aria-label="Add account">
+            <${Icon} d=${P.plus} size=${19} sw=${2} />
+          </button>
+          <button class="iconbtn" onClick=${() => setSettingsOpen(true)} aria-label="Settings">
+            <${Icon} d=${P.gear} size=${19} />
+          </button>
+        </div>
       </div>
+      <div class="hero-card">
+        <div class="lab">Net worth</div>
+        <div class="hero-num tnum">${fmt(netWorth)}</div>
+        <div class="statgrid">
+          <div class="stat"><div class="lab">Assets</div><div class="val tnum">${fmt(assets)}</div></div>
+          <div class="stat"><div class="lab">${owedIsCards ? "Card dues" : "Liabilities"}</div><div class="val tnum">${fmt(owed)}</div></div>
+        </div>
+      </div>
+      ${cards.length > 0 &&
+      html`
+        <div class="section-title">Credit cards</div>
+        ${cards.map((acc) => html`<${CardTile} key=${acc.id} acc=${acc}
+          onOpen=${() => setDetail(acc)} onPay=${() => setPayCard(acc)} />`)}
+      `}
       ${GROUPS.map((group) => {
-        const items = list.filter((a) => a.type === group.type);
+        const items = list.filter((a) => group.types.includes(a.type));
         if (!items.length) return null;
         return html`
-          <div key=${group.type}>
+          <div key=${group.label}>
             <div class="section-title">${group.label}</div>
-            <div class="card txcard">
-              ${items.map((acc) => html`
-                <div class="acct" key=${acc.id}>
-                  <button class="grow row" style="text-align:left" onClick=${() => setDetail(acc)}>
-                    <div class="grow">
-                      <div class="name">${acc.name}</div>
-                      ${acc.type === "credit_card" && acc.outstanding > 0 &&
-                      html`<div class="sub neg">Outstanding ${fmt(acc.outstanding)}</div>`}
-                      ${acc.cycle &&
-                      html`<div class="sub">cycle ${fmt(acc.cycle.spend)} · closes in ${acc.cycle.statement_in_days}d${acc.cycle.due_date ? ` · due ${shortDate(acc.cycle.due_date)}` : ""}</div>`}
-                    </div>
-                    <div class="bal tnum ${acc.balance < 0 ? "neg" : ""}">${fmt(acc.balance)}</div>
-                  </button>
-                  ${acc.type === "credit_card" && acc.outstanding > 0 &&
-                  html`<button class="paybtn" onClick=${() => setPayCard(acc)}>Pay</button>`}
-                </div>
-              `)}
+            <div class="listcard">
+              ${items.map((acc) => html`<${AccountRow} key=${acc.id} acc=${acc} onOpen=${() => setDetail(acc)} />`)}
             </div>
           </div>
         `;
       })}
       ${archived.length > 0 &&
       html`
-        <button class="section-title" style="background:none; width:100%; text-align:left; cursor:pointer"
+        <button class="archived-toggle ${showArchived ? "open" : ""}" aria-expanded=${showArchived}
           onClick=${() => setShowArchived(!showArchived)}>
-          Archived (${archived.length}) ${showArchived ? "▾" : "▸"}
+          <${Icon} d=${P.chevR} size=${14} sw=${2.2} />
+          Archived (${archived.length})
         </button>
         ${showArchived &&
         html`
-          <div class="card txcard" style="opacity:0.65">
-            ${archived.map((acc) => html`
-              <div class="acct" key=${acc.id}>
-                <button class="grow row" style="text-align:left" onClick=${() => setDetail(acc)}>
-                  <div class="grow"><div class="name">${acc.name}</div></div>
-                  <div class="bal tnum ${acc.balance < 0 ? "neg" : ""}">${fmt(acc.balance)}</div>
-                </button>
-              </div>
-            `)}
+          <div class="listcard" style="opacity:0.7">
+            ${archived.map((acc) => html`<${AccountRow} key=${acc.id} acc=${acc} onOpen=${() => setDetail(acc)} />`)}
           </div>
         `}
       `}
-      <a class="card export-row" href="/api/export.xlsx">⬇ Download Excel export</a>
-      <div class="signedin muted">
-        signed in as <b>${store.username || "…"}</b> ·${" "}
-        <button class="linkbtn" onClick=${async () => { try { await api.logout(); } catch { /* ignore */ } location.reload(); }}>
-          Log out
-        </button>
-      </div>
-      <button class="fab" onClick=${() => setAdding(true)} aria-label="Add account">+</button>
       ${payCard && html`<${PayCardSheet} card=${payCard} onClose=${() => setPayCard(null)}
         onSaved=${() => { setPayCard(null); setRefresh((r) => r + 1); }} />`}
       ${detail && html`<${AccountDetail} account=${detail} onClose=${() => setDetail(null)} />`}
+      ${settingsOpen && html`<${SettingsSheet} onClose=${() => setSettingsOpen(false)} />`}
       ${adding && html`<${NewAccountSheet} onClose=${() => setAdding(false)}
         onSaved=${() => { setAdding(false); setRefresh((r) => r + 1); }} />`}
     </div>

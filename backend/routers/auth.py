@@ -11,6 +11,7 @@ from backend.auth import DUMMY_HASH, SESSION_TTL_SECONDS, mint_session, verify_p
 from backend.db import get_db
 from backend.deps import COOKIE_NAME, token_username
 from backend.schemas import LoginIn
+from backend.services import credits as credits_svc
 from backend.users import get_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -48,8 +49,17 @@ def logout(response: Response):
 def me(request: Request, db: Session = Depends(get_db)):
     username = token_username(request)
     user = get_user(db, username) if username else None
-    return {
+    out = {
         "auth_enabled": True,
         "authenticated": user is not None,
         "username": user.username if user else None,
     }
+    if user:
+        # This runs on every page load, which is what makes the lazy monthly
+        # grant land within seconds of someone opening the app on the 1st — there
+        # is no scheduler, same idea as /api/recurring/due. Yes, a GET that
+        # writes: deliberate, and idempotent.
+        credits_svc.ensure_monthly_grant(db, user.id)
+        out["chat_enabled"] = user.chat_enabled
+        out["credits"] = credits_svc.snapshot(db, user.id)
+    return out

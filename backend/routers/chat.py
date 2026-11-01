@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 from uuid import uuid4
 
@@ -7,7 +8,7 @@ from datetime import datetime
 
 from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolUseBlock
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, func as sa_func, select
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
@@ -17,8 +18,11 @@ from backend.agent.tools import UPLOAD_DIR, WRITE_TOOLS
 from backend.db import SessionLocal, get_db
 from backend.deps import current_user
 from backend.models import ChatMessage, Conversation, User
+from backend.services import credits as credits_svc
 
 DEFAULT_TITLE = "New conversation"
+
+_log = logging.getLogger("credits")
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -33,7 +37,11 @@ class Attachment(BaseModel):
 
 class ChatIn(BaseModel):
     message: str
-    attachments: list[Attachment] = []
+    # Capped: prompt rule 11 tells the model to inspect_file EVERY attached path,
+    # each image is ~1,600-3,300 tokens, and they are re-sent on every round trip
+    # of the turn. Uncapped, one request could cost ~$1 before the daily valve
+    # noticed. Nobody attaches five files to a chat message legitimately.
+    attachments: list[Attachment] = Field(default_factory=list, max_length=5)
 
 
 def _summarize(name: str, tool_input: dict) -> str:
@@ -81,6 +89,9 @@ def _summarize(name: str, tool_input: dict) -> str:
 async def upload(file: UploadFile, user: User = Depends(current_user)):
     if not user.chat_enabled:
         raise HTTPException(403, "Chat is disabled for this account")
+    # Check before accepting 20 MB the user then can't do anything with. The
+    # credit itself belongs to the turn that uses the file, not to the upload.
+    _preflight(user)
     suffix = ("." + file.filename.rsplit(".", 1)[-1].lower()) if file.filename and "." in file.filename else ""
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(422, f"Unsupported file type '{suffix}'. "
@@ -135,13 +146,85 @@ def _compose_prompt(body: ChatIn) -> str:
             f"inspect_file tool before responding:\n{lines}]")
 
 
+# ---- credit metering -------------------------------------------------------
+# Helpers open their OWN SessionLocal (the _save_message pattern above) because
+# the request's db may already be closed inside a generator being torn down.
+
+def _preflight(user: User) -> None:
+    """Refuse before streaming starts, so a real HTTP status is still possible."""
+    db = SessionLocal()
+    try:
+        credits_svc.ensure_monthly_grant(db, user.id)
+        snap = credits_svc.snapshot(db, user.id)
+        if snap["total"] < 1:
+            raise HTTPException(402, detail=credits_svc.out_of_credits_detail(db, user.id))
+        # Abuse valves are separate from credits: 429, not 402, because having
+        # credits left is not the problem and buying more would not help.
+        try:
+            credits_svc.check_daily_caps(db, user.id, feature="chat")
+        except credits_svc.RateLimited as exc:
+            raise HTTPException(429, detail=exc.detail) from exc
+    finally:
+        db.close()
+
+
+def _settle(user_id: int, hold_id: int | None, msg, conv_id: int,
+            reason: str | None) -> dict:
+    """Log the turn's real usage, then keep, top up, or refund the hold.
+
+    A chat turn costs whatever it cost: the hold is 1 credit and the settle
+    charges the difference, derived from ResultMessage.total_cost_usd. Never
+    raises — a failure here must not mask whatever else went wrong.
+    """
+    db = SessionLocal()
+    try:
+        # Priced from our own table. msg.total_cost_usd comes from the CLI's
+        # stale Sonnet rate and would over-charge by ~2x.
+        cost_usd = credits_svc.result_cost_usd(msg)
+        actual = 0 if reason else credits_svc.chat_credits(cost_usd)
+        usage_id = credits_svc.record_usage(
+            db, user_id, feature="chat", endpoint="POST /api/chat",
+            result=msg, conversation_id=conv_id, credits_charged=actual,
+            cost_usd=cost_usd)
+        credits_svc.link_usage(db, hold_id, usage_id)
+        if reason:
+            credits_svc.refund(db, user_id, hold_id, reason)
+        elif actual > 1 and hold_id:
+            # Top up to the real cost. allow_partial drains to zero rather than
+            # going negative; any shortfall is recorded on the ledger row.
+            credits_svc.debit(db, user_id, feature="chat", amount=actual - 1,
+                              ref=f"settle-{hold_id}", usage_id=usage_id,
+                              allow_partial=True, note=f"turn cost {actual}")
+        return credits_svc.snapshot(db, user_id)
+    except Exception:
+        _log.exception("settle failed user=%s hold=%s", user_id, hold_id)
+        return {}
+    finally:
+        db.close()
+
+
+def _release(user_id: int, hold_id: int | None, reason: str) -> None:
+    if hold_id is None:
+        return
+    db = SessionLocal()
+    try:
+        credits_svc.refund(db, user_id, hold_id, reason)
+    except Exception:
+        _log.exception("release failed user=%s hold=%s", user_id, hold_id)
+    finally:
+        db.close()
+
+
 @router.post("")
 async def chat(body: ChatIn, user: User = Depends(current_user)):
     if not user.chat_enabled:
         raise HTTPException(403, "Chat is disabled for this account")
+    _preflight(user)          # 402 here, while a real status code is still possible
     session = registry.get(user.id, user.username)
+    turn_ref = f"chat-{uuid4().hex[:12]}"
 
     async def gen():
+        hold_id = None
         async with session.lock:
             try:
                 client = await session.get()
@@ -158,11 +241,21 @@ async def chat(body: ChatIn, user: User = Depends(current_user)):
                     conv.title = _title_from(body.message)
                     db.commit()
                 conv_id = conv.id
+                # Debit AFTER session.get() succeeded: BusyError and connect
+                # failures happen above, so a busy server never costs a credit.
+                # This also re-checks the balance, closing the two-tab race
+                # against the preflight.
+                try:
+                    hold_id = credits_svc.debit(db, user.id, feature="chat", ref=turn_ref)
+                except credits_svc.OutOfCredits as exc:
+                    yield {"event": "error", "data": json.dumps(exc.detail)}
+                    return
             finally:
                 db.close()
             _save_message("user", body.message or "(attached file)", conv_id,
                           attachments=[a.filename for a in body.attachments])
             chunks: list[str] = []
+            wrote_data = False
             agent_saved = False
             turn_done = False
             try:
@@ -182,6 +275,7 @@ async def chat(body: ChatIn, user: User = Depends(current_user)):
                             if isinstance(block, ToolUseBlock) and block.name.startswith("mcp__money__"):
                                 name = block.name.removeprefix("mcp__money__")
                                 summary = _summarize(name, block.input or {})
+                                wrote_data = wrote_data or name in WRITE_TOOLS
                                 _save_message("tool", summary, conv_id, tool_name=name,
                                               tool_writes=name in WRITE_TOOLS)
                                 yield {"event": "tool", "data": json.dumps({
@@ -194,9 +288,25 @@ async def chat(body: ChatIn, user: User = Depends(current_user)):
                             _save_message("agent", "".join(chunks), conv_id)
                         agent_saved = True
                         turn_done = True
+                        # terminal_reason is the CLI's own account of why the loop
+                        # ended, so "the user pressed Stop" is server-side truth
+                        # rather than something the browser claims.
+                        stopped = msg.terminal_reason in ("aborted_streaming", "aborted_tools")
+                        reason = ("agent_error" if msg.is_error
+                                  else "stopped" if stopped
+                                  else "no_output" if not (chunks or wrote_data)
+                                  else None)
+                        # Settle BEFORE the done frame so its payload carries the
+                        # post-settle balance.
+                        snap = _settle(user.id, hold_id, msg, conv_id, reason)
+                        hold_id = None
                         yield {"event": "done", "data": json.dumps({
                             "ok": not msg.is_error,
-                            "cost_usd": msg.total_cost_usd,
+                            # Our price, matching what was actually charged.
+                            # msg.total_cost_usd would report ~2x this.
+                            "cost_usd": credits_svc.result_cost_usd(msg),
+                            "stopped": stopped,
+                            "credits": snap,
                         })}
             except GeneratorExit:
                 # Client vanished mid-turn (tab closed / hard abort). The CLI keeps
@@ -204,12 +314,22 @@ async def chat(body: ChatIn, user: User = Depends(current_user)):
                 # interrupt and drain in the background, then re-raise.
                 if not turn_done:
                     asyncio.get_running_loop().create_task(session.abort_orphaned_turn(client))
+                # Real cost was incurred upstream, but the user saw nothing.
+                # Charging for an unseen reply is user-hostile; the leak stays
+                # visible in ai_usage (refunded=1) so it can be measured.
+                _release(user.id, hold_id, "client_disconnect")
+                hold_id = None
                 raise
             except Exception as exc:
                 # The SDK session may be wedged; drop it so the next message reconnects.
                 await session.reset()
+                _release(user.id, hold_id, "agent_error")
+                hold_id = None
                 yield {"event": "error", "data": json.dumps({"message": str(exc)})}
             finally:
+                # Safety net: no credit is ever left permanently held, even on a
+                # path nobody anticipated.
+                _release(user.id, hold_id, "unreconciled")
                 # Client disconnect raises CancelledError (not Exception) — keep
                 # whatever text already streamed.
                 if not agent_saved and chunks:

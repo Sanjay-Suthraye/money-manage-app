@@ -12,3 +12,9 @@ qrcode
 # Chat PDF attachments: text layer, page images for scans, password-protected
 # statements. One self-contained wheel (PDFium), no system packages.
 pypdfium2>=5.14,<6
+# Quick-add tier 3 only (cheap constrained JSON extraction). Separate from
+# claude-agent-sdk above, which spawns the `claude` CLI for the chat tab.
+anthropic>=1.7,<2
+
+# --- dev ---
+pytest

@@ -4,6 +4,14 @@ api_keys.env
 *.env
 !requirements.env
 
+# Android signing — a leaked upload key lets someone else ship as you, and
+# deploy.sh pushes main to GitHub. These must be ignored BEFORE any key exists.
+*.keystore
+*.jks
+key.properties
+*.aab
+*.apk
+
 # Data (includes personal finance exports)
 data/
 *.db

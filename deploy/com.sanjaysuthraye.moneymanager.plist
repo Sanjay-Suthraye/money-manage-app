@@ -13,15 +13,21 @@
         <string>--port</string>
         <string>8010</string>
     </array>
+    <!-- WorkingDirectory must be the repo root: uvicorn imports "backend.main",
+         so a wrong path here fails with ModuleNotFoundError and KeepAlive turns
+         that into an endless respawn loop. Keep in sync if the project moves. -->
     <key>WorkingDirectory</key>
-    <string>/Users/sanjaysuthraye/anaconda_projects/money_manager</string>
+    <string>/Users/sanjaysuthraye/anaconda_projects/3. Finance Apps/money_manager</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!-- Logs stay inside the project: data/logs/ (gitignored via data/). The app
+         writes its own rotated logs there too (backend/logging_setup.py); this
+         only catches startup/crash output before logging is configured. -->
     <key>StandardOutPath</key>
-    <string>/Users/sanjaysuthraye/anaconda_projects/money_manager/data/server.log</string>
+    <string>/Users/sanjaysuthraye/anaconda_projects/3. Finance Apps/money_manager/data/logs/launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/sanjaysuthraye/anaconda_projects/money_manager/data/server.log</string>
+    <string>/Users/sanjaysuthraye/anaconda_projects/3. Finance Apps/money_manager/data/logs/launchd.log</string>
 </dict>
 </plist>

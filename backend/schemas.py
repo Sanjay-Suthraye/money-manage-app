@@ -84,6 +84,29 @@ class TransactionPatch(BaseModel):
     note: str | None = None
 
 
+class QuickAddIn(BaseModel):
+    text: str = Field(min_length=1, max_length=300)
+
+
+class QuickAddConfirmIn(BaseModel):
+    """Commit a previewed draft and teach the tier-2 cache.
+
+    `draft` is a TransactionIn body verbatim. text/keys/corrected_fields are kept
+    off TransactionIn on purpose, so the existing form, the agent tools and the
+    importer are untouched by this feature.
+    """
+
+    request_id: str = Field(default="", max_length=32)
+    draft: TransactionIn
+    merchant_key: str | None = Field(default=None, max_length=64)
+    phrase_key: str | None = Field(default=None, max_length=64)
+    # Which fields the user edited on the chip. This is what teaches tier 2, and
+    # it is the real accuracy metric when read back out of the logs.
+    corrected_fields: list[str] = Field(default_factory=list)
+    create_person: str | None = Field(default=None, max_length=60)
+    source: str = "rules"
+
+
 class SplitIn(BaseModel):
     """One paid bill split with one person: my share is an expense, their share
     is a lend against them. Two rows, one split_group_id."""

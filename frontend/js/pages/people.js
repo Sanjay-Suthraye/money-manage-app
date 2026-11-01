@@ -1,8 +1,9 @@
 import { html, useState } from "../html.js";
 import { api } from "../api.js";
-import { fmt, todayISO } from "../format.js";
+import { fmt, shortDate, todayISO } from "../format.js";
+import { Icon, P } from "../icons.js";
 import { invalidate } from "../store.js";
-import { AmountInput, Chips, EmptyState, Sheet, toast, useApi, useStore } from "../components/ui.js";
+import { AmountInput, Chips, DateField, EmptyState, Sheet, slotColor, toast, useApi, useStore } from "../components/ui.js";
 
 const KIND_LABELS = {
   lend: "Lent",
@@ -57,16 +58,15 @@ function LoanSheet({ person, kind, onClose, onSaved }) {
   }
 
   return html`
-    <${Sheet} onClose=${onClose}>
-      <h2>${titles[kind]}</h2>
-      <${AmountInput} value=${amount} onChange=${setAmount} currency="INR" autofocus=${!prefill} />
-      <div class="field" style="margin-top:10px">
-        <label>${accountLabels[kind]}</label>
+    <${Sheet} title=${titles[kind]} onClose=${onClose}>
+      <${AmountInput} hero value=${amount} onChange=${setAmount} currency="INR" autofocus=${!prefill} />
+      <div class="field">
+        <div class="field-label">${accountLabels[kind]}</div>
         <${Chips} items=${accounts} value=${accountId} onChange=${setAccountId} />
       </div>
       <div class="field">
-        <label>Date</label>
-        <input type="date" value=${date} onInput=${(e) => setDate(e.target.value)} />
+        <div class="field-label">Date</div>
+        <${DateField} value=${date} onChange=${setDate} />
       </div>
       <div class="field">
         <label>Note</label>
@@ -83,20 +83,22 @@ function LedgerSheet({ person, onClose }) {
   const { data } = useApi(() => api.personLedger(person.id), [person.id]);
   return html`
     <${Sheet} onClose=${onClose}>
-      <div class="spread">
-        <h2 style="margin:0">${person.name}</h2>
-        <div class="tnum ${data?.net > 0 ? "pos" : data?.net < 0 ? "neg" : ""}" style="font-weight:700; font-size:17px">
-          ${data ? fmt(Math.abs(data.net)) : ""}
-          ${data?.net > 0 ? " owed to you" : data?.net < 0 ? " you owe" : ""}
+      <div class="sheet-head">
+        <h2 class="ellipsis">${person.name}</h2>
+        <div class="right">
+          <div class="tnum ${data?.net > 0 ? "pos" : ""}" style="font-weight:700; font-size:17px">
+            ${data ? (data.net === 0 ? "Settled" : fmt(Math.abs(data.net))) : ""}
+          </div>
+          <div class="muted" style="font-size:12px">${data?.net > 0 ? "owes you" : data?.net < 0 ? "you owe" : ""}</div>
         </div>
       </div>
-      <div style="margin-top:12px">
+      <div>
         ${(data?.entries || []).map(
           (e) => html`
             <div class="ledger-row" key=${e.id}>
               <div>
-                <div style="font-weight:550">${KIND_LABELS[e.type]}${e.note ? ` · ${e.note}` : ""}</div>
-                <div class="muted" style="font-size:12.5px">${e.date}</div>
+                <div style="font-weight:500">${KIND_LABELS[e.type]}${e.note ? ` · ${e.note}` : ""}</div>
+                <div class="muted" style="font-size:12.5px">${shortDate(e.date)}</div>
               </div>
               <div class="right">
                 <div class="tnum" style="font-weight:600">${fmt(e.amount)}</div>
@@ -126,8 +128,7 @@ function NewPersonSheet({ onClose, onSaved }) {
     }
   }
   return html`
-    <${Sheet} onClose=${onClose}>
-      <h2>New person</h2>
+    <${Sheet} title="New person" onClose=${onClose}>
       <div class="field">
         <label>Name</label>
         <input type="text" value=${name} onInput=${(e) => setName(e.target.value)} placeholder="e.g. Raj" autofocus />
@@ -147,11 +148,21 @@ export function PeoplePage() {
 
   return html`
     <div class="page">
-      <div class="topbar"><h1>People</h1></div>
-      <div class="sumstrip">
-        <div><div class="lab">Owed to you</div><div class="val pos tnum">${fmt(data?.total_owed_to_me || 0)}</div></div>
-        <div><div class="lab">You owe</div><div class="val neg tnum">${fmt(data?.total_i_owe || 0)}</div></div>
-        <div><div class="lab">Net</div><div class="val tnum">${fmt((data?.total_owed_to_me || 0) - (data?.total_i_owe || 0))}</div></div>
+      <div class="topbar">
+        <h1>People</h1>
+        <button class="iconbtn" onClick=${() => setSheet({ add: true })} aria-label="Add person">
+          <${Icon} d=${P.plus} size=${19} sw=${2} />
+        </button>
+      </div>
+      <div class="stat-tiles">
+        <div class="stat-tile">
+          <div class="lab">Owed to you</div>
+          <div class="val pos tnum">${fmt(data?.total_owed_to_me || 0)}</div>
+        </div>
+        <div class="stat-tile">
+          <div class="lab">You owe</div>
+          <div class="val tnum">${fmt(data?.total_i_owe || 0)}</div>
+        </div>
       </div>
       ${persons.length === 0 &&
       html`<${EmptyState} icon="🤝" title="No people yet"
@@ -159,29 +170,32 @@ export function PeoplePage() {
       ${persons.map(
         (p) => html`
           <div class="card person-card" key=${p.id}>
-            <button class="spread" style="width:100%; text-align:left" onClick=${() => setSheet({ ledger: p })}>
-              <div>
-                <div class="name">${p.name}</div>
-                <div class="muted" style="font-size:12.5px">
-                  ${p.last_activity ? `Last activity ${p.last_activity}` : "No activity"}
-                </div>
-              </div>
-              <div class="net tnum ${p.net > 0 ? "pos" : p.net < 0 ? "neg" : "muted"}">
-                ${p.net === 0 ? "Settled" : fmt(Math.abs(p.net))}
-                ${p.net > 0 ? html`<div class="muted" style="font-size:11px; font-weight:500; text-align:right">owes you</div>`
-                  : p.net < 0 ? html`<div class="muted" style="font-size:11px; font-weight:500; text-align:right">you owe</div>` : ""}
-              </div>
+            <button class="person-head" onClick=${() => setSheet({ ledger: p })}>
+              <span class=${`tile round ${p.net === 0 ? "neutral" : ""}`} style=${`--c:${slotColor(p.id)}`} aria-hidden="true">
+                ${p.name[0].toUpperCase()}
+              </span>
+              <span class="grow">
+                <span class="name ellipsis" style="display:block">${p.name}</span>
+                <span class="sub" style="display:block">
+                  ${p.last_activity ? `Last entry · ${shortDate(p.last_activity)}` : "No entries yet"}
+                </span>
+              </span>
+              <span class="right">
+                <span class="net tnum ${p.net > 0 ? "pos" : p.net === 0 ? "muted" : ""}" style="display:block">
+                  ${p.net === 0 ? "Settled" : fmt(Math.abs(p.net))}
+                </span>
+                <span class="dir" style="display:block">${p.net > 0 ? "owes you" : p.net < 0 ? "you owe" : " "}</span>
+              </span>
             </button>
             <div class="person-actions">
               <button onClick=${() => setSheet({ person: p, kind: "lend" })}>Lend</button>
               <button onClick=${() => setSheet({ person: p, kind: "borrow" })}>Borrow</button>
-              ${p.net > 0 && html`<button onClick=${() => setSheet({ person: p, kind: "repay_in" })}>Settle</button>`}
-              ${p.net < 0 && html`<button onClick=${() => setSheet({ person: p, kind: "repay_out" })}>Settle</button>`}
+              <button class="settle" disabled=${p.net === 0}
+                onClick=${() => setSheet({ person: p, kind: p.net > 0 ? "repay_in" : "repay_out" })}>Settle</button>
             </div>
           </div>
         `
       )}
-      <button class="fab" onClick=${() => setSheet({ add: true })} aria-label="Add person">+</button>
       ${sheet?.person &&
       html`<${LoanSheet} person=${sheet.person} kind=${sheet.kind} onClose=${() => setSheet(null)}
         onSaved=${() => { setSheet(null); setRefresh((r) => r + 1); }} />`}

@@ -11,8 +11,17 @@ export const store = {
   accounts: [],
   categories: [],
   persons: [],
+  /* AI credit balance from /auth/me, refreshed from the chat `done` event.
+     null until the first load. */
+  credits: null,
   loaded: false,
 };
+
+export function setCredits(credits) {
+  if (!credits) return;
+  store.credits = credits;
+  emit();
+}
 
 export function subscribe(fn) {
   listeners.add(fn);

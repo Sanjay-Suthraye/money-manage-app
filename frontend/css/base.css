@@ -3,24 +3,30 @@
 html { -webkit-text-size-adjust: 100%; }
 
 body {
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font);
   background: var(--page);
   color: var(--ink);
   font-size: 16px;
   line-height: 1.45;
   overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
 }
 
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 input, select, textarea { font: inherit; color: inherit; }
+button:disabled { cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 #app { min-height: 100dvh; }
 
 .page {
   max-width: 640px;
   margin: 0 auto;
-  padding: 12px 16px calc(var(--tab-h) + env(safe-area-inset-bottom) + 24px);
+  padding: 8px 16px calc(var(--tab-h) + env(safe-area-inset-bottom) + 24px);
+  font-variant-numeric: tabular-nums;
 }
+/* Transactions: the quick-add dock (~70px) sits above the tab bar too. */
+.page.has-dock { padding-bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 100px); }
 
 /* ---- Bottom tab bar ---- */
 .tabbar {
@@ -30,40 +36,62 @@ input, select, textarea { font: inherit; color: inherit; }
   padding-bottom: env(safe-area-inset-bottom);
   background: var(--surface);
   border-top: 1px solid var(--border);
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   z-index: 40;
 }
 .tabbar button {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 500;
   -webkit-tap-highlight-color: transparent;
 }
-.tabbar button.active { color: var(--accent); }
-.tabbar svg { width: 24px; height: 24px; }
+.tabbar button.active { color: var(--accent-text); font-weight: 600; }
+.tabbar svg { width: 22px; height: 22px; }
+
+/* ---- Icons & icon buttons ---- */
+.ico { display: block; flex: none; }
+.iconbtn {
+  width: 44px; height: 44px; flex: none;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+.iconbtn:active { background: var(--surface-3); }
+.iconbtn.plain { background: none; border: none; color: var(--ink-2); }
+.iconbtn.plain:active { background: var(--surface-3); }
+.iconbtn.well { background: var(--surface-2); border: none; color: var(--ink-2); }
+.iconbtn .badge {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent); color: var(--accent-ink);
+  font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+}
 
 /* ---- Cards & sections ---- */
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 14px 16px;
+  padding: 16px;
   margin-bottom: 12px;
 }
+.card-title { font-size: 15px; font-weight: 600; }
 .section-title {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 18px 0 8px 4px;
+  color: var(--ink-2);
+  margin: 20px 8px 8px;
 }
 
 /* ---- Header / month nav ---- */
@@ -71,45 +99,27 @@ input, select, textarea { font: inherit; color: inherit; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 0 10px;
+  gap: 8px;
+  min-height: 60px;
+  padding: 8px 0;
   position: sticky;
   top: 0;
   background: var(--page);
   z-index: 30;
 }
-.topbar h1 { font-size: 21px; font-weight: 700; }
-.monthnav { display: flex; align-items: center; gap: 4px; }
-.monthnav .label { font-size: 16.5px; font-weight: 650; min-width: 132px; text-align: center; }
-.monthnav button {
-  width: 36px; height: 36px;
-  border-radius: 50%;
-  display: grid; place-items: center;
-  color: var(--ink-2);
-  font-size: 19px;
+.topbar h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; padding-left: 8px; }
+.topbar-actions { display: flex; gap: 6px; }
+.monthnav { display: flex; align-items: center; gap: 2px; margin-left: -6px; }
+.monthnav .label {
+  font-size: 20px; font-weight: 600; letter-spacing: -0.01em;
+  min-width: 150px; text-align: center; white-space: nowrap;
 }
-.monthnav button:active { background: var(--surface-2); }
-
-/* ---- Floating add button ---- */
-.fab {
-  position: fixed;
-  right: max(18px, calc(50vw - 302px));
-  bottom: calc(var(--tab-h) + env(safe-area-inset-bottom) + 18px);
-  width: 54px; height: 54px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 28px;
-  line-height: 1;
-  display: grid; place-items: center;
-  box-shadow: var(--shadow);
-  z-index: 35;
-}
-.fab:active { filter: brightness(0.92); }
+.monthnav .iconbtn { width: 40px; }
 
 /* ---- Sheets (bottom sheet on mobile, modal on desktop) ---- */
 .sheet-backdrop {
   position: fixed; inset: 0;
-  background: rgba(0, 0, 0, 0.42);
+  background: var(--backdrop);
   z-index: 50;
   display: flex;
   align-items: flex-end;
@@ -121,60 +131,107 @@ input, select, textarea { font: inherit; color: inherit; }
   max-width: 640px;
   max-height: 92dvh;
   overflow-y: auto;
-  border-radius: 18px 18px 0 0;
+  border-radius: 28px 28px 0 0;
   box-shadow: var(--shadow-sheet);
-  padding: 8px 18px calc(18px + env(safe-area-inset-bottom));
+  padding: 10px 20px calc(24px + env(safe-area-inset-bottom));
   animation: sheet-up 0.22s ease-out;
+  font-variant-numeric: tabular-nums;
 }
 @keyframes sheet-up { from { transform: translateY(40px); opacity: 0.6; } to { transform: none; opacity: 1; } }
 @media (min-width: 768px) {
   .sheet-backdrop { align-items: center; }
-  .sheet { border-radius: 18px; max-height: 86vh; padding-bottom: 18px; }
+  .sheet { border-radius: 28px; max-height: 86vh; padding-bottom: 24px; }
 }
 .sheet .grabber {
-  width: 38px; height: 4.5px;
+  width: 40px; height: 5px;
   background: var(--baseline);
   border-radius: 3px;
-  margin: 4px auto 10px;
+  margin: 0 auto 10px;
 }
-.sheet h2 { font-size: 17.5px; font-weight: 650; margin-bottom: 12px; }
+.sheet h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 14px; }
+.sheet-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: -2px 0 16px;
+}
+.sheet-head h2 { margin: 0; min-width: 0; }
 
 /* ---- Forms ---- */
-.field { margin-bottom: 14px; }
-.field label {
+.field { margin-bottom: 18px; }
+.field label, .field-label {
   display: block;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--muted);
-  margin-bottom: 5px;
+  color: var(--ink-2);
+  margin-bottom: 8px;
 }
-.field input[type="text"], .field input[type="password"], .field input[type="date"], .field input[type="number"], .field select, .field textarea {
+.field input[type="text"], .field input[type="password"], .field input[type="date"], .field input[type="number"], .field select, .field textarea,
+.input {
   width: 100%;
-  padding: 11px 12px;
+  height: 46px;
+  padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--surface);
   font-size: 16px; /* prevents iOS zoom-on-focus */
+  color: var(--ink);
 }
-.field input:focus, .field select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.field textarea { height: auto; padding: 10px 12px; }
+.field input:focus, .field select:focus, .input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.grid2 .field { margin-bottom: 18px; }
+
+/* Friendly date ("Yesterday, 31 Oct") over a transparent native picker. */
+.datefield {
+  position: relative;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  height: 46px; padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 15px;
+  cursor: pointer;
+}
+.datefield .ico { color: var(--muted); }
+.field .datefield input[type="date"], .datefield input[type="date"] {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  opacity: 0;
+  border: none; padding: 0;
+  cursor: pointer;
+}
+.datefield:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
 
 .btn {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   width: 100%;
-  padding: 14px;
-  border-radius: var(--radius-sm);
+  min-height: 54px;
+  padding: 0 16px;
+  border-radius: var(--radius-md);
   background: var(--accent);
   color: var(--accent-ink);
-  font-size: 16.5px;
-  font-weight: 650;
+  font-size: 16px;
+  font-weight: 600;
   text-align: center;
+  text-decoration: none;
 }
 .btn:active { filter: brightness(0.92); }
 .btn:disabled { opacity: 0.45; }
-.btn.danger { background: var(--danger); }
+.btn.sm { min-height: 44px; border-radius: var(--radius-sm); font-size: 14.5px; }
+.btn.danger { background: var(--surface-2); color: var(--danger-text); }
 .btn.ghost { background: var(--surface-2); color: var(--ink); }
-.btn-row { display: flex; gap: 10px; margin-top: 6px; }
+.btn-row { display: flex; gap: 10px; margin-top: 8px; }
 .btn-row .btn { flex: 1; }
+.btn-row .btn.danger { flex: 0 0 auto; width: auto; padding: 0 20px; }
+.linkbtn { color: var(--accent-text); font-weight: 600; font-size: 13.5px; min-height: 32px; }
+
+/* ---- Progress bars (budgets, card cycle, credits) ---- */
+.bar { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; }
+.bar .fill { height: 100%; border-radius: 3px; background: var(--accent); }
+.bar .fill.warn { background: var(--warn); }
+.bar .fill.over { background: var(--danger); }
 
 /* ---- Utility ---- */
 .muted { color: var(--muted); }
@@ -182,9 +239,11 @@ input, select, textarea { font: inherit; color: inherit; }
 .pos { color: var(--income); }
 .neg { color: var(--expense); }
 .good { color: var(--good-text); }
+.danger-text { color: var(--danger-text); }
 .right { text-align: right; }
 .tnum { font-variant-numeric: tabular-nums; }
 .row { display: flex; align-items: center; gap: 10px; }
 .spread { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .grow { flex: 1; min-width: 0; }
 .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

@@ -9,6 +9,11 @@ knows your full spending history.
   so your stats stay honest.
 - **Friend loans** — lend / borrow / settle with per-person running balances,
   partial settlements, and split bills ("I paid ₹1,200, Raj owes half").
+- **Quick add** — type "450 swiggy yesterday" in the bar above the + button and
+  a confirmation chip appears (`₹450 · Food · GPay LITE · Yesterday`) with every
+  field tappable. Nothing is saved until you tap ✓. Most entries are parsed in
+  Python with no model call at all, and it learns: correct a category once and
+  that merchant is filed your way from then on. See **Quick add** below.
 - **Chat agent** — "I spent 500 on lunch and 2000 on groceries today" records
   both; "who owes me money?" answers from the database. It asks one clarifying
   question when something (like the account) is ambiguous. Runs on your Claude
@@ -41,12 +46,25 @@ Open http://localhost:8010 on the Mac.
 
 The server also runs as a **LaunchAgent** (`deploy/com.sanjaysuthraye.moneymanager.plist`,
 installed to `~/Library/LaunchAgents/`): it starts at login and auto-restarts if
-it crashes — no terminal needed. Logs go to `data/server.log`. Manage it with:
+it crashes — no terminal needed. Manage it with:
 
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.sanjaysuthraye.moneymanager   # restart
 launchctl bootout   gui/$(id -u)/com.sanjaysuthraye.moneymanager      # stop (then ./run.sh works manually)
 ```
+
+**All logs stay inside this folder, under `data/logs/`** (gitignored with the rest
+of `data/`): `launchd.log` is startup/crash output from the LaunchAgent, `app.log`
+is the app's own rotated log, and `copilot.jsonl` is one line per quick-add.
+Nothing is written outside the project.
+
+> The plist hardcodes an absolute `WorkingDirectory`, and uvicorn imports
+> `backend.main` — so **if you move or rename the project folder, update the plist
+> and reinstall it**. A stale path fails with `ModuleNotFoundError: No module named
+> 'backend'`, and `KeepAlive` turns that into an endless respawn loop that quietly
+> fills a log file at the old location. Check with
+> `launchctl list | grep money` — the middle column is the last exit code and
+> should be `0`.
 
 ## Production (AWS Lightsail)
 
@@ -84,10 +102,87 @@ zero setup. Alternatives (in `.env` at the project root):
 - `CLAUDE_CODE_OAUTH_TOKEN=...` — explicit token from `claude setup-token`
 - `AGENT_USE_API_KEY=1` — use the `ANTHROPIC_API_KEY` from `api_keys.env`
   (pay-per-use API billing; off by default on purpose)
-- `AGENT_MODEL=haiku` — cheaper/faster model (default `sonnet`)
+- `AGENT_MODEL=claude-haiku-4-5` — cheaper/faster model. The default is the
+  pinned `claude-sonnet-5`, **not** a bare `sonnet` alias: aliases are resolved
+  by the `claude` CLI, so a CLI upgrade would silently move you to a different
+  model and price with nothing to catch it.
+- `AGENT_FALLBACK_MODEL=...` — used when the primary is overloaded, instead of
+  erroring the reply stream.
 
 Only one credential is ever passed to the agent subprocess, so an exported
 `ANTHROPIC_API_KEY` can't silently switch you to API billing.
+
+The agent is given only the money tools (`tools=[]` drops the CLI's built-in
+tool preset, which it never used). Measured on an identical turn, that cut input
+from **18,686 to 8,326 tokens** and the turn's cost from **$0.110 to $0.047**.
+Set `AGENT_LEAN_TOOLS=0` to restore the preset.
+
+## Quick add (the cheap-first cascade)
+
+Typing an entry goes through three tiers, and stops at the first one that is
+confident. The point is that the common cases never reach a model:
+
+| Tier | What it is | Cost |
+|---|---|---|
+| 1 | Regex + a ~230-entry India-specific merchant lexicon (swiggy, blinkit, ola, jio, irctc…), amounts (`2k`, `1.5k`, `2 lakh`, `₹1,200`), relative dates (`yesterday`, `last friday`, `12 sep`) | free, instant |
+| 2 | What **you** confirmed last time for this merchant or phrase | free, instant |
+| 3 | One small constrained-JSON call to `claude-haiku-4-5` | 1 AI entry |
+
+Tier 2 is what makes it get better with use: every confirmation teaches it, and
+a correction *overrides* the built-in lexicon — if you file Swiggy under
+Groceries because you order Instamart through it, the app stops arguing after
+one correction.
+
+**Tier 3 is off by default**, because it is the only thing here that spends real
+money. The chat agent runs on your Claude Code subscription (no API billing);
+tier 3 would use the `ANTHROPIC_API_KEY` from `api_keys.env` at roughly **₹0.11
+per entry that needs it** (measured: ~670 input + ~110 output tokens on
+`claude-haiku-4-5`). Turn it on with `COPILOT_ENABLED=1` in `.env`. With it off,
+tiers 1-2 still work and an entry they can't parse just opens the chip
+half-filled for you to finish.
+
+## AI entries (credits)
+
+Both quick add and chat draw on one balance of **AI entries**, so runaway usage
+is bounded. Defaults: **100 free per month**, reset lazily on the 1st (IST), no
+rollover. Three buckets are spent in order — free → earned → purchased — and
+**purchased entries never expire**.
+
+Two rules the code enforces rather than merely documents:
+
+- **Adding transactions manually is never gated.** At zero entries the app is a
+  fully working expense tracker; only the AI features pause. Chat returns `402`
+  with `manual_entry_ok: true` and shows a calm card, not an error.
+- **A failed parse is never charged.** Timeouts, API errors, low confidence, a
+  stopped chat turn, a dropped connection — all refund automatically, while the
+  real cost is still recorded in `ai_usage` so it stays measurable.
+
+Inspect and adjust from the CLI:
+
+```bash
+python -m backend.users credits show sanjay
+python -m backend.users credits grant sanjay 50 --bucket purchased
+python -m backend.users credits set sanjay --free 0          # test the zero case
+python -m backend.users credits ledger sanjay --limit 10
+python -m backend.users credits reconcile                    # audit: balances vs ledger
+python -m backend.users chat-disable sanjay
+```
+
+Per-call cost, tokens and which tier answered are logged as JSONL to
+`data/logs/copilot.jsonl` (the typed text is **not** logged unless you set
+`COPILOT_LOG_TEXT=1`). The number worth watching:
+
+```bash
+jq -r 'select(.event=="quick_add") | .tier' data/logs/copilot.jsonl | sort | uniq -c
+```
+
+If tiers 1-2 dominate, the cascade is doing its job.
+
+> Earning entries by watching ads is **not available**: this is a PWA, AdMob is
+> native-only, and any endpoint that grants credits because the browser claims
+> an ad was watched is just a free-credit button. The server-side-verification
+> seam exists (`backend/services/ads.py`) but is dormant — a future native
+> wrapper plugs into it without a schema change.
 
 ## Importing your Money Manager history
 
@@ -138,6 +233,16 @@ backend/
 frontend/           no-build Preact + htm + Chart.js, served by FastAPI
 data/money.db       SQLite (WAL) — delete it to start fresh
 ```
+
+## Tests
+
+```bash
+~/miniconda3/envs/money/bin/python -m pytest        # 134 tests, ~1s
+```
+
+They run against a temp database (`DB_PATH` is redirected in `tests/conftest.py`
+before any backend import, and a session fixture refuses to run otherwise), so
+they never touch `data/money.db`.
 
 ## Roadmap (post-POC)
 
