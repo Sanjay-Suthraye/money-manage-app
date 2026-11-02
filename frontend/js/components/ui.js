@@ -105,8 +105,8 @@ export function Seg({ options, value, onChange }) {
   `;
 }
 
-/* ---- chip picker ---- */
-export function Chips({ items, value, onChange, allowNone = false }) {
+/* ---- chip picker (children render after the items, e.g. a "+ New" chip) ---- */
+export function Chips({ items, value, onChange, allowNone = false, children }) {
   return html`
     <div class="chips">
       ${items.map(
@@ -120,6 +120,7 @@ export function Chips({ items, value, onChange, allowNone = false }) {
           </button>
         `
       )}
+      ${children}
     </div>
   `;
 }

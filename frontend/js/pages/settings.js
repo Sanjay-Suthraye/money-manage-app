@@ -1,4 +1,4 @@
-/* Settings: AI entries, data export, sign out.
+/* Settings: AI entries, categories, recurring rules, data export, sign out.
 
    Absorbs the export link and the "signed in as" footer that used to sit at the
    bottom of the Accounts page, so there is exactly one settings place.
@@ -16,6 +16,7 @@ import { shortDate } from "../format.js";
 import { html, useState } from "../html.js";
 import { Sheet, toast, useApi } from "../components/ui.js";
 import { Icon, P } from "../icons.js";
+import { ManageCategoriesSheet } from "./categories.js";
 import { RecurringSheet } from "./recurring.js";
 import { setCredits, store } from "../store.js";
 
@@ -103,6 +104,7 @@ export function SettingsSheet({ onClose }) {
   const [refresh, setRefresh] = useState(0);
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [recurringOpen, setRecurringOpen] = useState(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const { data: credits } = useApi(() => api.credits(), [refresh]);
 
   return html`
@@ -128,6 +130,14 @@ export function SettingsSheet({ onClose }) {
       <div class="field">
         <div class="field-label">Money</div>
         <div class="list-group">
+          <button class="list-row" onClick=${() => setCategoriesOpen(true)}>
+            <span class="tile" style="--c:var(--series-2)"><${Icon} d=${P.tag} size=${18} /></span>
+            <div class="grow">
+              <div class="ttl">Categories</div>
+              <div class="sub">Add, rename, recolor, merge</div>
+            </div>
+            <${Icon} d=${P.chevR} size=${16} sw=${2} />
+          </button>
           <button class="list-row" onClick=${() => setRecurringOpen(true)}>
             <span class="tile" style="--c:var(--series-4)"><${Icon} d=${P.recur} size=${18} /></span>
             <div class="grow">
@@ -164,6 +174,7 @@ export function SettingsSheet({ onClose }) {
         </button>
       </div>
 
+      ${categoriesOpen && html`<${ManageCategoriesSheet} onClose=${() => setCategoriesOpen(false)} />`}
       ${recurringOpen && html`<${RecurringSheet} onClose=${() => setRecurringOpen(false)} />`}
       ${creditsOpen &&
       credits &&

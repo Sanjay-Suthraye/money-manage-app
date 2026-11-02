@@ -127,6 +127,13 @@
 .chip.sm { min-height: 32px; padding: 0 12px; font-size: 13px; border-radius: 16px; }
 .chip.sel { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .chip:disabled { opacity: 0.5; }
+.chip.add { border-style: dashed; color: var(--accent-text); }
+
+/* Inline "new category" under a category picker */
+.newcat { display: grid; justify-items: start; gap: 8px; margin-top: 10px; }
+.newcat-row { display: flex; gap: 8px; width: 100%; }
+.newcat-row .input { flex: 1; min-width: 0; height: 44px; }
+.newcat-row .btn { width: auto; padding: 0 18px; }
 
 /* ---- Amount input ---- */
 .amount-wrap {

@@ -23,6 +23,7 @@ export const P = {
   download: "M12 4v12M7 11l5 5 5-5M5 20h14",
   logout: "M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4",
   sparkle: "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z",
+  tag: "M20 13l-7 7-9-9V4h7l9 9ZM8 8h.01",
 
   // category glyphs
   food: "M7 3v8a2 2 0 0 0 2 2v8M11 3v8M7 7h4M17 3c-1.7 0-3 2-3 5s1.3 4 3 4v9",

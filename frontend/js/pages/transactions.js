@@ -7,6 +7,7 @@ import {
   toast, useApi, useStore,
 } from "../components/ui.js";
 import { Icon, P } from "../icons.js";
+import { NewCategoryInline } from "./categories.js";
 import { RecurringBanner, RecurringSheet } from "./recurring.js";
 import { isHidden, scheduleDelete, subscribePending, undoDelete } from "../pendingDelete.js";
 import { QuickAdd } from "../components/quickadd.js";
@@ -93,6 +94,7 @@ export function TxSheet({ tx, onClose, onSaved }) {
   const [accountId, setAccountId] = useState(tx?.account?.id ?? accounts[0]?.id ?? null);
   const [toAccountId, setToAccountId] = useState(tx?.to_account?.id ?? null);
   const [categoryId, setCategoryId] = useState(tx?.category?.id ?? null);
+  const [addingCategory, setAddingCategory] = useState(false);
   const [date, setDate] = useState(tx?.date || todayISO());
   const [note, setNote] = useState(tx?.note || "");
   const [saving, setSaving] = useState(false);
@@ -190,7 +192,7 @@ export function TxSheet({ tx, onClose, onSaved }) {
           { value: "transfer", label: "Transfer" },
         ]}
         value=${type}
-        onChange=${(v) => { setType(v); setCategoryId(null); }}
+        onChange=${(v) => { setType(v); setCategoryId(null); setAddingCategory(false); }}
       />
       <${AmountInput}
         hero
@@ -211,7 +213,12 @@ export function TxSheet({ tx, onClose, onSaved }) {
         <div class="field">
           <div class="field-label">Category</div>
           <${Chips} items=${cats} value=${selectedParent?.id === categoryId ? categoryId : selectedParent?.id} allowNone
-            onChange=${(id) => setCategoryId(id)} />
+            onChange=${(id) => setCategoryId(id)}>
+            ${!addingCategory &&
+            html`<button class="chip add" onClick=${() => setAddingCategory(true)}>
+              <${Icon} d=${P.plus} size=${15} sw=${2.2} />New
+            </button>`}
+          <//>
           ${selectedParent?.children.length > 0 &&
           html`
             <div style="margin-top:8px">
@@ -223,6 +230,10 @@ export function TxSheet({ tx, onClose, onSaved }) {
               />
             </div>
           `}
+          ${addingCategory &&
+          html`<${NewCategoryInline} kind=${type} parent=${selectedParent}
+            onCreated=${(cat) => { setCategoryId(cat.id); setAddingCategory(false); }}
+            onCancel=${() => setAddingCategory(false)} />`}
         </div>
       `}
       <div class="field">

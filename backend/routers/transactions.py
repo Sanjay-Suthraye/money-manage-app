@@ -96,19 +96,4 @@ def delete_category(cat_id: int, reassign_to: int | None = None, db: Session = D
 @router.post("/categories", status_code=201)
 def create_category(data: CategoryIn, db: Session = Depends(get_db),
                     user: User = Depends(current_user)):
-    cat = Category(user_id=user.id, name=data.name.strip(), kind=data.kind,
-                   parent_id=data.parent_id)
-    if data.parent_id:
-        parent = db.get(Category, data.parent_id)
-        if not parent or parent.user_id != user.id:
-            from fastapi import HTTPException
-            raise HTTPException(422, f"Category {data.parent_id} not found")
-        cat.color_slot = parent.color_slot
-        cat.kind = parent.kind
-    else:
-        cat.color_slot = (db.query(Category)
-                          .filter(Category.parent_id.is_(None), Category.user_id == user.id)
-                          .count() % 8)
-    db.add(cat)
-    db.commit()
-    return {"id": cat.id, "name": cat.name, "kind": cat.kind, "color_slot": cat.color_slot}
+    return cat_svc.create_category(db, user.id, data)

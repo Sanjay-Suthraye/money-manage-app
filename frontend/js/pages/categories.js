@@ -1,6 +1,6 @@
-import { html, useState } from "../html.js";
+import { html, useEffect, useRef, useState } from "../html.js";
 import { api } from "../api.js";
-import { invalidate } from "../store.js";
+import { invalidate, refreshRefData } from "../store.js";
 import { CategoryTile, Chips, Seg, Sheet, slotColor, toast, useStore } from "../components/ui.js";
 import { Icon, P } from "../icons.js";
 
@@ -118,6 +118,55 @@ function NewCategoryRow({ kind, onDone }) {
         <${Chips} items=${parents} value=${parentId} onChange=${setParentId} allowNone />
       </div>
       <button class="btn" style="margin-top:10px" disabled=${!name.trim()} onClick=${add}>Add</button>
+    </div>
+  `;
+}
+
+/* Inline "new category" for pickers (the add-transaction sheet): creates it,
+   reloads the shared lists so its chip exists, then hands it back to be
+   selected. With `parent` it offers to nest the new one there. */
+export function NewCategoryInline({ kind, parent, onCreated, onCancel }) {
+  const [name, setName] = useState("");
+  const [nested, setNested] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const input = useRef(null);
+  useEffect(() => input.current?.focus(), []);
+
+  async function add() {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    let cat;
+    try {
+      cat = await api.createCategory({ name: name.trim(), kind, parent_id: nested ? parent.id : null });
+    } catch (err) {
+      toast(err.message);
+      setSaving(false);
+      return;
+    }
+    await refreshRefData().catch(() => {});
+    toast(`Added ${cat.name}`);
+    onCreated(cat);
+  }
+
+  return html`
+    <div class="newcat">
+      <div class="newcat-row">
+        <input ref=${input} type="text" class="input" placeholder=${`New ${kind} category`}
+          aria-label="New category name" value=${name}
+          onInput=${(e) => setName(e.target.value)}
+          onKeyDown=${(e) => {
+            if (e.key === "Enter") add();
+            else if (e.key === "Escape") onCancel();
+          }} />
+        <button class="btn sm" disabled=${!name.trim() || saving} onClick=${add}>Add</button>
+        <button class="iconbtn well" onClick=${onCancel} aria-label="Cancel adding category">
+          <${Icon} d=${P.close} size=${16} sw=${2.2} />
+        </button>
+      </div>
+      ${parent &&
+      html`<button class="chip sm ${nested ? "sel" : ""}" aria-pressed=${nested} onClick=${() => setNested(!nested)}>
+        Inside ${parent.name}
+      </button>`}
     </div>
   `;
 }
