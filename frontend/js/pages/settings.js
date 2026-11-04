@@ -102,52 +102,60 @@ function CreditsSheet({ data, onClose, onChanged }) {
   `;
 }
 
+/* Who is signed in, with switch and log out. Shown at the top of Settings and
+   at the foot of the Accounts page, where people look for it first. */
+export function SignedInCard() {
+  const me = store.username || "";
+  const others = knownAccounts().filter((u) => u !== me);
+  return html`
+    <div class="list-group">
+      <div class="list-row">
+        <span class="tile mono round" aria-hidden="true">${(me[0] || "?").toUpperCase()}</span>
+        <div class="grow">
+          <div class="ttl ellipsis">${me || "…"}</div>
+          <div class="sub">Signed in on this device</div>
+        </div>
+      </div>
+      ${others.map(
+        (name) => html`
+          <button class="list-row" key=${name} onClick=${() => signOut(name)}>
+            <span class="tile neutral round" aria-hidden="true">${name[0].toUpperCase()}</span>
+            <div class="grow">
+              <div class="ttl ellipsis">Switch to ${name}</div>
+              <div class="sub">Asks for that account's password</div>
+            </div>
+            <${Icon} d=${P.chevR} size=${16} sw=${2} />
+          </button>
+        `
+      )}
+      <button class="list-row" onClick=${() => signOut()}>
+        <span class="tile neutral round"><${Icon} d=${P.people} size=${18} /></span>
+        <div class="grow">
+          <div class="ttl">${others.length ? "Use another account" : "Switch account"}</div>
+          <div class="sub">Sign in with a different username</div>
+        </div>
+        <${Icon} d=${P.chevR} size=${16} sw=${2} />
+      </button>
+      <button class="list-row danger" onClick=${() => signOut()}>
+        <span class="tile round" style="--c:var(--danger)"><${Icon} d=${P.logout} size=${18} /></span>
+        <div class="grow"><div class="ttl">Log out</div></div>
+      </button>
+    </div>
+  `;
+}
+
 export function SettingsSheet({ onClose }) {
   const [refresh, setRefresh] = useState(0);
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [recurringOpen, setRecurringOpen] = useState(false);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const { data: credits } = useApi(() => api.credits(), [refresh]);
-  const me = store.username || "";
-  const others = knownAccounts().filter((u) => u !== me);
 
   return html`
     <${Sheet} title="Settings" onClose=${onClose}>
       <div class="field">
         <div class="field-label">Account</div>
-        <div class="list-group">
-          <div class="list-row">
-            <span class="tile mono round" aria-hidden="true">${(me[0] || "?").toUpperCase()}</span>
-            <div class="grow">
-              <div class="ttl ellipsis">${me || "…"}</div>
-              <div class="sub">Signed in on this device</div>
-            </div>
-          </div>
-          ${others.map(
-            (name) => html`
-              <button class="list-row" key=${name} onClick=${() => signOut(name)}>
-                <span class="tile neutral round" aria-hidden="true">${name[0].toUpperCase()}</span>
-                <div class="grow">
-                  <div class="ttl ellipsis">Switch to ${name}</div>
-                  <div class="sub">Asks for that account's password</div>
-                </div>
-                <${Icon} d=${P.chevR} size=${16} sw=${2} />
-              </button>
-            `
-          )}
-          <button class="list-row" onClick=${() => signOut()}>
-            <span class="tile neutral round"><${Icon} d=${P.people} size=${18} /></span>
-            <div class="grow">
-              <div class="ttl">${others.length ? "Use another account" : "Switch account"}</div>
-              <div class="sub">Sign in with a different username</div>
-            </div>
-            <${Icon} d=${P.chevR} size=${16} sw=${2} />
-          </button>
-          <button class="list-row danger" onClick=${() => signOut()}>
-            <span class="tile round" style="--c:var(--danger)"><${Icon} d=${P.logout} size=${18} /></span>
-            <div class="grow"><div class="ttl">Log out</div></div>
-          </button>
-        </div>
+        <${SignedInCard} />
       </div>
 
       <div class="field">

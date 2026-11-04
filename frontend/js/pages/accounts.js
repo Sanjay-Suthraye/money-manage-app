@@ -6,7 +6,7 @@ import { invalidate, store } from "../store.js";
 import { AmountInput, Chips, Sheet, toast, useApi, useStore } from "../components/ui.js";
 import { TxEditor, TxRow } from "./transactions.js";
 import { isHidden, subscribePending } from "../pendingDelete.js";
-import { SettingsSheet } from "./settings.js";
+import { SettingsSheet, SignedInCard } from "./settings.js";
 
 /* Display groups, in page order (credit cards render as their own cards above
    these). Every ACCOUNT_TYPES value lands in exactly one place. */
@@ -385,6 +385,8 @@ export function AccountsPage() {
           </div>
         `}
       `}
+      <div class="section-title">Signed in</div>
+      <${SignedInCard} />
       ${payCard && html`<${PayCardSheet} card=${payCard} onClose=${() => setPayCard(null)}
         onSaved=${() => { setPayCard(null); setRefresh((r) => r + 1); }} />`}
       ${detail && html`<${AccountDetail} account=${detail} onClose=${() => setDetail(null)} />`}
