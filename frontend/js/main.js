@@ -68,6 +68,9 @@ function LoginView() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // The eye toggle swallows mousedown so the input keeps focus and the phone
+  // keyboard stays open while revealing.
+  const [showPassword, setShowPassword] = useState(false);
   const [known, setKnown] = useState(knownAccounts);
   const userInput = useRef(null);
   const passInput = useRef(null);
@@ -143,14 +146,30 @@ function LoginView() {
           />
         </div>
         <div class="field">
-          <label>Password</label>
-          <input
-            ref=${passInput}
-            type="password"
-            autocomplete="current-password"
-            value=${password}
-            onInput=${(e) => setPassword(e.target.value)}
-          />
+          <label for="login-password">Password</label>
+          <div class="pw-field">
+            <input
+              id="login-password"
+              ref=${passInput}
+              type=${showPassword ? "text" : "password"}
+              autocomplete="current-password"
+              autocapitalize="none"
+              autocorrect="off"
+              spellcheck=${false}
+              value=${password}
+              onInput=${(e) => setPassword(e.target.value)}
+            />
+            <button
+              type="button"
+              class="pw-toggle"
+              aria-label=${showPassword ? "Hide password" : "Show password"}
+              aria-pressed=${showPassword}
+              onMouseDown=${(e) => e.preventDefault()}
+              onClick=${() => setShowPassword(!showPassword)}
+            >
+              <${Icon} d=${showPassword ? P.eyeOff : P.eye} size=${20} />
+            </button>
+          </div>
         </div>
         ${error && html`<div class="login-error">${error}</div>`}
         <button class="btn" type="submit" disabled=${busy || !username.trim() || !password}>

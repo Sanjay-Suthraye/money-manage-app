@@ -528,6 +528,17 @@
 }
 .login-brand h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
 .login-card .btn { margin-top: 4px; }
+.pw-field { position: relative; }
+.field .pw-field input { padding-right: 50px; }
+.pw-toggle {
+  position: absolute; top: 1px; right: 1px; bottom: 1px;
+  width: 48px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  -webkit-tap-highlight-color: transparent;
+}
+.pw-toggle[aria-pressed="true"] { color: var(--accent-text); }
 .login-error { color: var(--danger-text); font-size: 13.5px; margin: -6px 0 12px; }
 
 /* ---- Quick add dock: [+] [450 swiggy yesterday ↑] above the tab bar ---- */
