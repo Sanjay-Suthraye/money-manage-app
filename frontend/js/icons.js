@@ -21,7 +21,7 @@ export const P = {
   stop: "M7 7h10v10H7Z",
   calendar: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7ZM4 10h16M8 3v4M16 3v4",
   download: "M12 4v12M7 11l5 5 5-5M5 20h14",
-  logout: "M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4",
+  logout: "M9 20H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3M15 17l5-5-5-5M20 12H9",
   sparkle: "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z",
   tag: "M20 13l-7 7-9-9V4h7l9 9ZM8 8h.01",
 

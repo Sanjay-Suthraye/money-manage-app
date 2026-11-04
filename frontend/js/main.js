@@ -1,7 +1,9 @@
-import { html, render, useEffect, useState } from "./html.js";
+import { html, render, useEffect, useRef, useState } from "./html.js";
 import { api, setUnauthorizedHandler } from "./api.js";
 import { refreshRefData, store } from "./store.js";
 import { ToastHost } from "./components/ui.js";
+import { Icon, P } from "./icons.js";
+import { forgetAccount, knownAccounts, rememberAccount, takeSwitchTarget } from "./session.js";
 import { TransactionsPage } from "./pages/transactions.js";
 import { StatsPage } from "./pages/stats.js";
 import { AccountsPage } from "./pages/accounts.js";
@@ -62,10 +64,29 @@ function App() {
 }
 
 function LoginView() {
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState(() => takeSwitchTarget() || "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [known, setKnown] = useState(knownAccounts);
+  const userInput = useRef(null);
+  const passInput = useRef(null);
+
+  // Arriving from "Switch to …" (username filled in) goes straight to the password.
+  useEffect(() => (username ? passInput : userInput).current?.focus(), []);
+
+  function pick(name) {
+    setUsername(name);
+    setPassword("");
+    setError(null);
+    passInput.current?.focus();
+  }
+
+  function forget(name) {
+    forgetAccount(name);
+    setKnown(knownAccounts());
+    if (username === name) setUsername("");
+  }
 
   async function submit(e) {
     e.preventDefault();
@@ -89,9 +110,31 @@ function LoginView() {
           <div class="logo" aria-hidden="true">₹</div>
           <h1>Money Manager</h1>
         </div>
+        ${known.length > 0 &&
+        html`<div class="field">
+          <div class="field-label">On this device</div>
+          <div class="list-group">
+            ${known.map(
+              (name) => html`
+                <div class=${`list-row acct-pick ${name === username ? "sel" : ""}`} key=${name}>
+                  <button type="button" class="acct-pick-main" onClick=${() => pick(name)}
+                    aria-pressed=${name === username}>
+                    <span class="tile mono round" aria-hidden="true">${name[0].toUpperCase()}</span>
+                    <span class="grow ellipsis">${name}</span>
+                  </button>
+                  <button type="button" class="iconbtn plain" onClick=${() => forget(name)}
+                    aria-label=${`Remove ${name} from this device`}>
+                    <${Icon} d=${P.close} size=${16} sw=${2} />
+                  </button>
+                </div>
+              `
+            )}
+          </div>
+        </div>`}
         <div class="field">
           <label>Username</label>
           <input
+            ref=${userInput}
             type="text"
             autocomplete="username"
             autocapitalize="none"
@@ -102,6 +145,7 @@ function LoginView() {
         <div class="field">
           <label>Password</label>
           <input
+            ref=${passInput}
             type="password"
             autocomplete="current-password"
             value=${password}
@@ -130,6 +174,7 @@ function Root() {
       .authMe()
       .then((s) => {
         store.username = s.username || null;
+        if (s.authenticated) rememberAccount(s.username);
         /* /me carries the AI credit balance, so every page has it via
            useStore() without its own fetch. It is also what triggers the lazy
            monthly grant server-side. */

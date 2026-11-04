@@ -464,7 +464,6 @@
   margin-left: 6px; vertical-align: 1px;
 }
 
-.signedin { text-align: center; font-size: 12.5px; padding: 14px 0 4px; }
 
 /* ---- Settings-style list rows (settings, recurring, categories) ---- */
 .list-group {
@@ -483,6 +482,17 @@
 .list-row .ttl, .recur-row .ttl { font-weight: 500; }
 .list-row .sub, .recur-row .sub { font-size: 12.5px; color: var(--muted); }
 .list-row > .ico:last-child, .recur-row > .ico:last-child { color: var(--faint); }
+.list-row.danger .ttl { color: var(--danger-text); font-weight: 600; }
+
+/* Login: accounts this device has signed in with */
+.list-row.acct-pick { padding: 4px 4px 4px 14px; gap: 4px; }
+.acct-pick-main {
+  display: flex; align-items: center; gap: 12px;
+  flex: 1; min-width: 0; min-height: 50px;
+  text-align: left; font-size: 15px; font-weight: 500;
+}
+.acct-pick.sel { background: var(--accent-soft); }
+.acct-pick.sel .tile { background: var(--accent); color: var(--accent-ink); }
 
 /* ---- Category management ---- */
 .swatches { display: flex; gap: 10px; flex-wrap: wrap; }

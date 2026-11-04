@@ -1,4 +1,5 @@
-/* Settings: AI entries, categories, recurring rules, data export, sign out.
+/* Settings: who is signed in (switch account, log out), AI entries,
+   categories, recurring rules, data export.
 
    Absorbs the export link and the "signed in as" footer that used to sit at the
    bottom of the Accounts page, so there is exactly one settings place.
@@ -19,6 +20,7 @@ import { Icon, P } from "../icons.js";
 import { ManageCategoriesSheet } from "./categories.js";
 import { RecurringSheet } from "./recurring.js";
 import { setCredits, store } from "../store.js";
+import { knownAccounts, signOut } from "../session.js";
 
 function CreditsSheet({ data, onClose, onChanged }) {
   const balance = data.balance;
@@ -106,9 +108,48 @@ export function SettingsSheet({ onClose }) {
   const [recurringOpen, setRecurringOpen] = useState(false);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const { data: credits } = useApi(() => api.credits(), [refresh]);
+  const me = store.username || "";
+  const others = knownAccounts().filter((u) => u !== me);
 
   return html`
     <${Sheet} title="Settings" onClose=${onClose}>
+      <div class="field">
+        <div class="field-label">Account</div>
+        <div class="list-group">
+          <div class="list-row">
+            <span class="tile mono round" aria-hidden="true">${(me[0] || "?").toUpperCase()}</span>
+            <div class="grow">
+              <div class="ttl ellipsis">${me || "…"}</div>
+              <div class="sub">Signed in on this device</div>
+            </div>
+          </div>
+          ${others.map(
+            (name) => html`
+              <button class="list-row" key=${name} onClick=${() => signOut(name)}>
+                <span class="tile neutral round" aria-hidden="true">${name[0].toUpperCase()}</span>
+                <div class="grow">
+                  <div class="ttl ellipsis">Switch to ${name}</div>
+                  <div class="sub">Asks for that account's password</div>
+                </div>
+                <${Icon} d=${P.chevR} size=${16} sw=${2} />
+              </button>
+            `
+          )}
+          <button class="list-row" onClick=${() => signOut()}>
+            <span class="tile neutral round"><${Icon} d=${P.people} size=${18} /></span>
+            <div class="grow">
+              <div class="ttl">${others.length ? "Use another account" : "Switch account"}</div>
+              <div class="sub">Sign in with a different username</div>
+            </div>
+            <${Icon} d=${P.chevR} size=${16} sw=${2} />
+          </button>
+          <button class="list-row danger" onClick=${() => signOut()}>
+            <span class="tile round" style="--c:var(--danger)"><${Icon} d=${P.logout} size=${18} /></span>
+            <div class="grow"><div class="ttl">Log out</div></div>
+          </button>
+        </div>
+      </div>
+
       <div class="field">
         <div class="field-label">AI</div>
         <div class="list-group">
@@ -155,23 +196,6 @@ export function SettingsSheet({ onClose }) {
             <${Icon} d=${P.chevR} size=${16} sw=${2} />
           </a>
         </div>
-      </div>
-
-      <div class="signedin muted">
-        signed in as <b>${store.username || "…"}</b> ·${" "}
-        <button
-          class="linkbtn"
-          onClick=${async () => {
-            try {
-              await api.logout();
-            } catch {
-              /* log out locally regardless */
-            }
-            location.reload();
-          }}
-        >
-          Log out
-        </button>
       </div>
 
       ${categoriesOpen && html`<${ManageCategoriesSheet} onClose=${() => setCategoriesOpen(false)} />`}
